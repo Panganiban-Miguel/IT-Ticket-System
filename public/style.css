@@ -15,7 +15,7 @@ body {
 
 .navbar {
     height: 70px;
-    background: white;
+    background: #0B2163;
     border-bottom: 1px solid #e5e7eb;
     display: flex;
     align-items: center;
@@ -26,7 +26,7 @@ body {
 .logo {
     font-size: 24px;
     font-weight: bold;
-    color: #1769aa;
+    color: lightgray;
 }
 
 .nav-right {
@@ -37,7 +37,7 @@ body {
 
 .nav-link {
     text-decoration: none;
-    color: #4b5563;
+    color: lightgray;
     font-size: 14px;
 }
 
@@ -138,7 +138,7 @@ body {
     display: inline-block;
     padding: 8px 14px;
     border-radius: 7px;
-    background: #1769aa;
+    background: #0B2163;
     color: white;
     text-decoration: none;
     font-size: 12px;
@@ -146,7 +146,7 @@ body {
 }
 
 .view-button:hover {
-    background: #12578c;
+    background: #0c2a8a;
 }
 
 /* =========================
@@ -170,12 +170,12 @@ body {
 }
 
 .save-button {
-    background: #1769aa;
+    background: #0B2163;
     color: white;
 }
 
 .save-button:hover {
-    background: #12578c;
+    background: #0c2a8a;
 }
 
 .delete-button {
@@ -209,7 +209,7 @@ body {
 .brand {
     font-size: 20px;
     font-weight: bold;
-    color: #2563eb;
+    color: #0B2163;
 }
 
 .logout-btn {
@@ -330,7 +330,7 @@ body {
     border: none;
     border-radius: 7px;
 
-    background: #2563eb;
+    background: #0B2163;
     color: white;
 
     font-size: 14px;
@@ -340,7 +340,7 @@ body {
 }
 
 .submit-btn:hover {
-    background: #1d4ed8;
+    background: #0c2a8a;
 }
 
 /* =========================
@@ -402,7 +402,7 @@ body {
 }
 
 .role-buttons button:hover {
-    background: #1d4ed8;
+    background: #0c2a8a;
 }
 
 /* =========================
@@ -427,16 +427,16 @@ body {
 }
 
 .panel-buttons button {
-    background-color: #2563eb;
+    background-color: #0B2163;
     color: white;
 }
 
 .panel-buttons button:hover {
-    background-color: #1d4ed8;
+    background-color: #0c2a8a;
 }
 
 a {
-    color: #2563eb;
+    color: #0B2163;
     text-decoration: none;
 }
 
@@ -475,7 +475,7 @@ a:hover {
     }
 }
 .create-ticket-btn {
-    background: #2563eb;
+    background: #0B2163;
     color: white;
     padding: 12px 20px;
     border: none;
@@ -488,7 +488,7 @@ a:hover {
 }
 
 .create-ticket-btn:hover {
-    background: #1d4ed8;
+    background: #0c2a8a;
     transform: translateY(-1px);
 }
 .ticket-row {
