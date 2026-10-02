@@ -50,6 +50,95 @@
             overflow-x: auto;
         }
 
+        .mobile-ticket-list {
+            display: none;
+        }
+
+        .mobile-ticket-swipe {
+            position: relative;
+            overflow: hidden;
+            background: #b42318;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .mobile-ticket-delete {
+            position: absolute;
+            inset: 0 0 0 auto;
+            width: 88px;
+            border: 0;
+            background: #b42318;
+            color: white;
+            font: inherit;
+            font-weight: bold;
+        }
+
+        .mobile-ticket-delete:focus-visible {
+            outline: 3px solid #111827;
+            outline-offset: -4px;
+        }
+
+        .mobile-ticket-card {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            min-height: 88px;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            background: white;
+            color: #1f2937;
+            text-decoration: none;
+            touch-action: pan-y;
+            transform: translateX(0);
+            transition: transform 180ms ease-out;
+        }
+
+        .mobile-ticket-card:focus-visible {
+            outline: 3px solid #0B2163;
+            outline-offset: -3px;
+        }
+
+        .mobile-ticket-swipe.is-open .mobile-ticket-card {
+            transform: translateX(-88px);
+        }
+
+        .mobile-ticket-swipe.is-dragging .mobile-ticket-card {
+            transition: none;
+        }
+
+        .mobile-ticket-info {
+            min-width: 0;
+        }
+
+        .mobile-ticket-info strong,
+        .mobile-ticket-issue,
+        .mobile-ticket-meta {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .mobile-ticket-info strong {
+            font-size: 14px;
+        }
+
+        .mobile-ticket-issue {
+            margin-top: 3px;
+            font-size: 13px;
+        }
+
+        .mobile-ticket-meta {
+            margin-top: 4px;
+            color: #6b7280;
+            font-size: 12px;
+        }
+
+        .mobile-ticket-status {
+            flex: 0 0 auto;
+        }
+
         table {
             width: 100%;
 
@@ -96,9 +185,9 @@
 
             border-radius: 20px;
 
-            background: #eef6fc;
+            background: #f3f4f6;
 
-            color: #1769aa;
+            color: #0B2163;
 
             font-size: 12px;
 
@@ -129,7 +218,7 @@
         }
 
         .view-button:hover {
-            background: #0c2a8a;
+            background: #25448F;
         }
 
 
@@ -172,8 +261,12 @@
 
         @media (max-width: 650px) {
 
-            .navbar {
-                padding: 0 20px;
+            .table-container {
+                display: none;
+            }
+
+            .mobile-ticket-list {
+                display: block;
             }
 
             .container {
@@ -188,8 +281,38 @@
                 gap: 10px;
             }
 
+            .create-ticket-btn {
+                display: block;
+                width: 100%;
+                padding: 16px 20px;
+                font-size: 17px;
+            }
+
             .summary-grid {
-                grid-template-columns: 1fr;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .summary-card {
+                aspect-ratio: 1;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                padding: 12px;
+                text-align: center;
+            }
+
+            .summary-label {
+                margin-bottom: 8px;
+            }
+
+        }
+
+        @media (max-width: 480px) {
+
+            .tickets-card th:first-child,
+            .tickets-card td:first-child {
+                display: none;
             }
 
         }
@@ -201,44 +324,27 @@
 <body>
 
 
-<!-- =========================
-     NAVBAR
-========================= -->
+<div class="staff-layout">
+    <aside class="staff-sidebar">
+        <div class="staff-sidebar-header">
+            <button class="staff-menu-toggle" id="staffMenuToggle" type="button" aria-expanded="false" aria-controls="staffNav" aria-label="Open staff menu">
+                <span class="staff-menu-icon" aria-hidden="true"></span>
+            </button>
+            <div class="staff-brand">IT Support</div>
+            <a href="/staff-profile.html" class="staff-profile-button staff-mobile-profile" aria-label="Staff Profile" title="Staff Profile">
+                <span class="staff-profile-icon" aria-hidden="true">👤</span>
+            </a>
+        </div>
+        <nav class="staff-nav" id="staffNav" aria-label="Staff navigation">
+            <a href="/staff.html" class="staff-nav-link" aria-current="page">Dashboard</a>
+            <a href="/staff-profile.html" class="staff-profile-button staff-nav-profile" aria-label="Staff Profile" title="Staff Profile">
+                <span class="staff-profile-icon" aria-hidden="true">👤</span>
+            </a>
+            <a href="/" class="staff-nav-link staff-logout">Logout</a>
+        </nav>
+    </aside>
 
-<nav class="navbar">
-
-    <div class="logo">
-        IT Support
-    </div>
-
-
-    <div class="nav-right">
-
-        <a
-            href="/staff-profile.html"
-            class="nav-link"
-        >
-            Staff Profile
-        </a>
-
-        <a
-            href="/"
-            class="nav-link"
-        >
-            Logout
-        </a>
-
-    </div>
-
-</nav>
-
-
-
-<!-- =========================
-     MAIN
-========================= -->
-
-<main class="container">
+    <main class="container staff-main">
 
 
     <!-- HEADER -->
@@ -406,6 +512,8 @@
 
         </div>
 
+        <div class="mobile-ticket-list" id="mobileTicketList"></div>
+
 
         <div
             class="empty-state"
@@ -428,6 +536,7 @@
 
 
 </main>
+</div>
 
 
 <script src="/ticket-metrics.js"></script>

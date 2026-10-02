@@ -22,6 +22,10 @@ const staffCredentials = {
     email: "staff@example.test",
     password: "test-only-password"
 };
+const secondStaffCredentials = {
+    email: "second-staff@example.test",
+    password: "second-test-password"
+};
 
 let server;
 let baseUrl;
@@ -30,14 +34,24 @@ function writeWorkbook() {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(
         workbook,
-        XLSX.utils.json_to_sheet([{
-            "Staff ID": "S-100",
-            Name: "Test Staff",
-            Email: staffCredentials.email,
-            Password: staffCredentials.password,
-            Role: "Engineer",
-            Department: "IT"
-        }]),
+        XLSX.utils.json_to_sheet([
+            {
+                "Staff ID": "S-100",
+                Name: "Test Staff",
+                Email: staffCredentials.email,
+                Password: staffCredentials.password,
+                Role: "Engineer",
+                Department: "IT"
+            },
+            {
+                "Staff ID": "S-200",
+                Name: "Second Staff",
+                Email: secondStaffCredentials.email,
+                Password: secondStaffCredentials.password,
+                Role: "Engineer",
+                Department: "IT"
+            }
+        ]),
         "Staff"
     );
     XLSX.writeFile(workbook, databasePath);
@@ -52,6 +66,21 @@ async function login(email, password) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password })
+    });
+}
+
+function sessionCookie(response) {
+    return response.headers.get("set-cookie").split(";")[0];
+}
+
+async function updateProfile(cookie, profile) {
+    return fetch(`${baseUrl}/api/staff/profile`, {
+        method: "PATCH",
+        headers: {
+            "Content-Type": "application/json",
+            Cookie: cookie
+        },
+        body: JSON.stringify(profile)
     });
 }
 
@@ -82,6 +111,112 @@ test("POST /api/staff/login accepts valid credentials", async () => {
     assert.equal(response.status, 200);
     assert.equal(body.message, "Login successful.");
     assert.equal(body.staff.email, staffCredentials.email);
+    assert.equal(Object.hasOwn(body.staff, "password"), false);
+    assert.match(response.headers.get("set-cookie"), /HttpOnly/i);
+    assert.match(response.headers.get("set-cookie"), /SameSite=Lax/i);
+});
+
+test("POST /api/staff/login selects the account matching the submitted credentials", async () => {
+    const response = await login(
+        secondStaffCredentials.email,
+        secondStaffCredentials.password
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.staff.staffId, "S-200");
+    assert.equal(body.staff.name, "Second Staff");
+    assert.equal(body.staff.email, secondStaffCredentials.email);
+});
+
+test("staff profile requires a session and updates only public profile fields", async () => {
+    const unauthenticatedResponse = await fetch(`${baseUrl}/api/staff/profile`);
+    assert.equal(unauthenticatedResponse.status, 401);
+
+    const unauthenticatedUpdate = await fetch(`${baseUrl}/api/staff/profile`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "Unauthorized Update" })
+    });
+    assert.equal(unauthenticatedUpdate.status, 401);
+
+    const loginResponse = await login(staffCredentials.email, staffCredentials.password);
+    const cookie = sessionCookie(loginResponse);
+    const profileResponse = await fetch(`${baseUrl}/api/staff/profile`, {
+        headers: { Cookie: cookie }
+    });
+    const profileBody = await profileResponse.json();
+
+    assert.equal(profileResponse.status, 200);
+    assert.equal(profileBody.staff.name, "Test Staff");
+    assert.equal(Object.hasOwn(profileBody.staff, "password"), false);
+
+    const updateResponse = await updateProfile(cookie, { name: "Updated Staff" });
+    const updateBody = await updateResponse.json();
+    assert.equal(updateResponse.status, 200);
+    assert.equal(updateBody.staff.name, "Updated Staff");
+    assert.equal(Object.hasOwn(updateBody.staff, "password"), false);
+
+    const workbook = XLSX.readFile(databasePath);
+    const [staff] = XLSX.utils.sheet_to_json(workbook.Sheets.Staff);
+    assert.equal(staff.Name, "Updated Staff");
+    assert.equal(staff.Password, staffCredentials.password);
+});
+
+test("staff profile validates and hashes password changes", async () => {
+    const loginResponse = await login(staffCredentials.email, staffCredentials.password);
+    const cookie = sessionCookie(loginResponse);
+
+    const mismatchResponse = await updateProfile(cookie, {
+        name: "Test Staff",
+        currentPassword: staffCredentials.password,
+        newPassword: "new-test-password",
+        confirmPassword: "different-test-password"
+    });
+    assert.equal(mismatchResponse.status, 400);
+
+    const wrongCurrentResponse = await updateProfile(cookie, {
+        name: "Test Staff",
+        currentPassword: "incorrect-test-password",
+        newPassword: "new-test-password",
+        confirmPassword: "new-test-password"
+    });
+    assert.equal(wrongCurrentResponse.status, 403);
+
+    const updateResponse = await updateProfile(cookie, {
+        name: "Test Staff",
+        currentPassword: staffCredentials.password,
+        newPassword: "new-test-password",
+        confirmPassword: "new-test-password"
+    });
+    const updateBody = await updateResponse.json();
+    assert.equal(updateResponse.status, 200);
+    assert.equal(Object.hasOwn(updateBody.staff, "password"), false);
+
+    const workbook = XLSX.readFile(databasePath);
+    const [staff] = XLSX.utils.sheet_to_json(workbook.Sheets.Staff);
+    assert.match(staff.Password, /^scrypt:[0-9a-f]{32}:[0-9a-f]{128}$/);
+
+    const oldPasswordResponse = await login(staffCredentials.email, staffCredentials.password);
+    const newPasswordResponse = await login(staffCredentials.email, "new-test-password");
+    assert.equal(oldPasswordResponse.status, 401);
+    assert.equal(newPasswordResponse.status, 200);
+});
+
+test("staff logout invalidates the session", async () => {
+    const loginResponse = await login(staffCredentials.email, staffCredentials.password);
+    const cookie = sessionCookie(loginResponse);
+    const logoutResponse = await fetch(`${baseUrl}/api/staff/logout`, {
+        method: "POST",
+        headers: { Cookie: cookie }
+    });
+
+    assert.equal(logoutResponse.status, 204);
+
+    const profileResponse = await fetch(`${baseUrl}/api/staff/profile`, {
+        headers: { Cookie: cookie }
+    });
+    assert.equal(profileResponse.status, 401);
 });
 
 test("POST /api/staff/login limits attempts and allows retry after the window", async () => {

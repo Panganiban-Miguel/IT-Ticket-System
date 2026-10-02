@@ -1,5 +1,6 @@
 const express = require("express");
 const { rateLimit } = require("express-rate-limit");
+const crypto = require("node:crypto");
 const fs = require("fs");
 const path = require("path");
 const XLSX = require("xlsx");
@@ -41,6 +42,102 @@ const lockFile = path.join(
 );
 
 const LOCK_TIMEOUT_MS = 30000;
+const STAFF_SESSION_COOKIE = "it_staff_session";
+const STAFF_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const staffSessions = new Map();
+
+function hashStaffPassword(password) {
+    const salt = crypto.randomBytes(16);
+    const hash = crypto.scryptSync(password, salt, 64);
+    return `scrypt:${salt.toString("hex")}:${hash.toString("hex")}`;
+}
+
+function verifyStaffPassword(password, storedPassword) {
+    const storedValue = String(storedPassword || "");
+    const parts = storedValue.split(":");
+
+    if (
+        parts.length === 3 &&
+        parts[0] === "scrypt" &&
+        /^[0-9a-f]{32}$/i.test(parts[1]) &&
+        /^[0-9a-f]{128}$/i.test(parts[2])
+    ) {
+        const expectedHash = Buffer.from(parts[2], "hex");
+        const actualHash = crypto.scryptSync(
+            String(password),
+            Buffer.from(parts[1], "hex"),
+            expectedHash.length
+        );
+        return crypto.timingSafeEqual(actualHash, expectedHash);
+    }
+
+    const enteredBuffer = Buffer.from(String(password));
+    const storedBuffer = Buffer.from(storedValue);
+    return enteredBuffer.length === storedBuffer.length &&
+        crypto.timingSafeEqual(enteredBuffer, storedBuffer);
+}
+
+function staffProfile(staff) {
+    return {
+        staffId: staff["Staff ID"],
+        name: staff.Name,
+        email: staff.Email,
+        role: staff.Role,
+        department: staff.Department
+    };
+}
+
+function getStaffSessionToken(req) {
+    const cookieHeader = req.headers.cookie || "";
+    const cookie = cookieHeader
+        .split(";")
+        .map(value => value.trim())
+        .find(value => value.startsWith(`${STAFF_SESSION_COOKIE}=`));
+
+    return cookie ? cookie.slice(STAFF_SESSION_COOKIE.length + 1) : "";
+}
+
+function setStaffSessionCookie(req, res, token, maxAgeSeconds) {
+    const cookieParts = [
+        `${STAFF_SESSION_COOKIE}=${token}`,
+        "Path=/",
+        "HttpOnly",
+        "SameSite=Lax",
+        `Max-Age=${maxAgeSeconds}`
+    ];
+
+    if (req.secure || process.env.NODE_ENV === "production") {
+        cookieParts.push("Secure");
+    }
+
+    res.setHeader("Set-Cookie", cookieParts.join("; "));
+}
+
+function requireStaffSession(req, res, next) {
+    const token = getStaffSessionToken(req);
+    const session = staffSessions.get(token);
+
+    if (!session || session.expiresAt <= Date.now()) {
+        staffSessions.delete(token);
+        return res.status(401).json({ message: "Please log in to continue." });
+    }
+
+    req.staffSession = session;
+    next();
+}
+
+function findStaffForSession(staffData, session) {
+    return staffData.find(staff => {
+        const staffId = String(staff["Staff ID"] || "");
+        const staffEmail = String(staff.Email || "").trim().toLowerCase();
+
+        if (session.staffId) {
+            return staffId === session.staffId && staffEmail === session.email;
+        }
+
+        return staffEmail === session.email;
+    });
+}
 
 function acquireWorkbookLock() {
     try {
@@ -753,7 +850,7 @@ app.post("/api/staff/login", loginRateLimiter, (req, res) => {
 
                     return (
                         staffEmail === enteredEmail &&
-                        staffPassword === enteredPassword
+                        verifyStaffPassword(enteredPassword, staffPassword)
                     );
 
                 }
@@ -783,29 +880,33 @@ app.post("/api/staff/login", loginRateLimiter, (req, res) => {
         );
 
 
+        for (const [token, existingSession] of staffSessions) {
+            if (existingSession.expiresAt <= Date.now()) {
+                staffSessions.delete(token);
+            }
+        }
+        staffSessions.delete(getStaffSessionToken(req));
+
+        const sessionToken = crypto.randomBytes(32).toString("hex");
+        const session = {
+            staffId: String(staff["Staff ID"] || ""),
+            email: String(staff.Email || "").trim().toLowerCase(),
+            expiresAt: Date.now() + STAFF_SESSION_TTL_MS
+        };
+        staffSessions.set(sessionToken, session);
+        setStaffSessionCookie(
+            req,
+            res,
+            sessionToken,
+            STAFF_SESSION_TTL_MS / 1000
+        );
+
         res.json({
 
             message:
                 "Login successful.",
 
-            staff: {
-
-                staffId:
-                    staff["Staff ID"],
-
-                name:
-                    staff.Name,
-
-                email:
-                    staff.Email,
-
-                role:
-                    staff.Role,
-
-                department:
-                    staff.Department
-
-            }
+            staff: staffProfile(staff)
 
         });
 
@@ -825,6 +926,125 @@ app.post("/api/staff/login", loginRateLimiter, (req, res) => {
 
     }
 
+});
+
+app.get("/api/staff/profile", requireStaffSession, (req, res) => {
+    try {
+        const workbook = XLSX.readFile(excelFile);
+        const worksheet = workbook.Sheets.Staff;
+
+        if (!worksheet) {
+            return res.status(404).json({ message: "Staff sheet not found." });
+        }
+
+        const staffData = XLSX.utils.sheet_to_json(worksheet);
+        const staff = findStaffForSession(staffData, req.staffSession);
+
+        if (!staff) {
+            staffSessions.delete(getStaffSessionToken(req));
+            setStaffSessionCookie(req, res, "", 0);
+            return res.status(401).json({ message: "Please log in to continue." });
+        }
+
+        return res.json({ staff: staffProfile(staff) });
+    } catch (error) {
+        console.error("Get staff profile error:", error);
+        return res.status(500).json({ message: "Unable to load staff profile." });
+    }
+});
+
+app.patch("/api/staff/profile", requireStaffSession, (req, res) => {
+    try {
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        const currentPassword = typeof body.currentPassword === "string"
+            ? body.currentPassword
+            : "";
+        const newPassword = typeof body.newPassword === "string"
+            ? body.newPassword
+            : "";
+        const confirmPassword = typeof body.confirmPassword === "string"
+            ? body.confirmPassword
+            : "";
+
+        if (!name || name.length > 100) {
+            return res.status(400).json({
+                message: "Please enter a name between 1 and 100 characters."
+            });
+        }
+
+        const changingPassword = Boolean(
+            currentPassword || newPassword || confirmPassword
+        );
+
+        if (changingPassword) {
+            if (!currentPassword || !newPassword || !confirmPassword) {
+                return res.status(400).json({
+                    message: "Enter your current password and the new password twice."
+                });
+            }
+
+            if (newPassword.length < 8 || newPassword.length > 256) {
+                return res.status(400).json({
+                    message: "The new password must be between 8 and 256 characters."
+                });
+            }
+
+            if (newPassword !== confirmPassword) {
+                return res.status(400).json({ message: "The new passwords do not match." });
+            }
+        }
+
+        const workbook = XLSX.readFile(excelFile);
+        const worksheet = workbook.Sheets.Staff;
+
+        if (!worksheet) {
+            return res.status(404).json({ message: "Staff sheet not found." });
+        }
+
+        const staffData = XLSX.utils.sheet_to_json(worksheet);
+        const staff = findStaffForSession(staffData, req.staffSession);
+
+        if (!staff) {
+            staffSessions.delete(getStaffSessionToken(req));
+            setStaffSessionCookie(req, res, "", 0);
+            return res.status(401).json({ message: "Please log in to continue." });
+        }
+
+        if (
+            changingPassword &&
+            !verifyStaffPassword(currentPassword, staff.Password)
+        ) {
+            return res.status(403).json({ message: "The current password is incorrect." });
+        }
+
+        staff.Name = name;
+        if (changingPassword) {
+            staff.Password = hashStaffPassword(newPassword);
+        }
+
+        workbook.Sheets.Staff = XLSX.utils.json_to_sheet(staffData);
+        writeWorkbook(workbook);
+
+        return res.json({
+            message: "Profile updated successfully.",
+            staff: staffProfile(staff)
+        });
+    } catch (error) {
+        console.error("Update staff profile error:", error);
+        const isLocked = error && error.code === "DATABASE_LOCKED";
+        return res.status(isLocked ? 409 : 500).json({
+            message: isLocked
+                ? error.message
+                : "Unable to update staff profile."
+        });
+    }
+});
+
+app.post("/api/staff/logout", (req, res) => {
+    staffSessions.delete(getStaffSessionToken(req));
+    setStaffSessionCookie(req, res, "", 0);
+    return res.sendStatus(204);
 });
 
 
@@ -1684,6 +1904,7 @@ app.put(
 
 app.delete(
     "/api/tickets/:ticketId",
+    requireStaffSession,
     (req, res) => {
 
         try {

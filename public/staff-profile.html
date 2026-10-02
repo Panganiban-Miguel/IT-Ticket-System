@@ -19,38 +19,6 @@
             min-height: 100vh;
         }
 
-        .navbar {
-            height: 70px;
-            background: #0B2163;
-            border-bottom: 1px solid #e5e7eb;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 50px;
-        }
-
-        .logo {
-            font-size: 24px;
-            font-weight: bold;
-            color: lightgray;
-        }
-
-        .nav-right {
-            display: flex;
-            align-items: center;
-            gap: 25px;
-        }
-
-        .nav-link {
-            text-decoration: none;
-            color: lightgray;
-            font-size: 14px;
-        }
-
-        .nav-link:hover {
-            color: #1769aa;
-        }
-
         .container {
             max-width: 800px;
             margin: 45px auto;
@@ -91,7 +59,7 @@
             width: 70px;
             height: 70px;
             border-radius: 50%;
-            background: #eef6fc;
+            background: #f3f4f6;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -142,7 +110,7 @@
 
         .back-button {
             display: inline-block;
-            background: #1769aa;
+            background: #0B2163;
             color: white;
             text-decoration: none;
             padding: 12px 20px;
@@ -152,12 +120,107 @@
         }
 
         .back-button:hover {
-            background: #12578c;
+            background: #25448F;
+        }
+
+        .profile-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .edit-button,
+        .save-button,
+        .cancel-button {
+            border: 0;
+            border-radius: 8px;
+            cursor: pointer;
+            font: inherit;
+            font-size: 14px;
+            font-weight: bold;
+            padding: 12px 20px;
+        }
+
+        .edit-button,
+        .save-button {
+                    background: #0B2163;
+            color: white;
+        }
+
+        .edit-button:hover,
+        .save-button:hover {
+                    background: #25448F;
+        }
+
+        .cancel-button {
+            background: #e5e7eb;
+            color: #374151;
+        }
+
+        .cancel-button:hover {
+            background: #d1d5db;
+        }
+
+        .edit-form {
+            border-top: 1px solid #e5e7eb;
+            margin-top: 25px;
+            padding-top: 24px;
+        }
+
+        .edit-form h3 {
+            font-size: 17px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 7px;
+        }
+
+        .form-group input {
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            color: #1f2937;
+            font: inherit;
+            font-size: 14px;
+            padding: 11px 12px;
+            width: 100%;
+        }
+
+        .form-group input:focus {
+            border-color: #0B2163;
+            outline: 2px solid rgba(11, 33, 99, 0.18);
+        }
+
+        .form-status {
+            color: #9f2d2d;
+            font-size: 14px;
+            margin: 0 0 16px;
+        }
+
+        .form-status:empty {
+            display: none;
+        }
+
+        .profile-status {
+            color: #17623a;
+            font-size: 14px;
+            margin-bottom: 16px;
+        }
+
+        .profile-status:empty {
+            display: none;
         }
 
         @media (max-width: 650px) {
-            .navbar {
-                padding: 0 20px;
+            .page-header {
+                display: block;
             }
 
             .container {
@@ -176,15 +239,27 @@
     </style>
 </head>
 <body>
-    <nav class="navbar">
-        <div class="logo">IT Support</div>
-        <div class="nav-right">
-            <a href="/staff.html" class="nav-link">Dashboard</a>
-            <a href="/" class="nav-link">Logout</a>
-        </div>
-    </nav>
+    <div class="staff-layout">
+        <aside class="staff-sidebar">
+            <div class="staff-sidebar-header">
+                <button class="staff-menu-toggle" id="staffMenuToggle" type="button" aria-expanded="false" aria-controls="staffNav" aria-label="Open staff menu">
+                    <span class="staff-menu-icon" aria-hidden="true"></span>
+                </button>
+                <div class="staff-brand">IT Support</div>
+                <a href="/staff-profile.html" class="staff-profile-button staff-mobile-profile" aria-label="Staff Profile" title="Staff Profile" aria-current="page">
+                    <span class="staff-profile-icon" aria-hidden="true">👤</span>
+                </a>
+            </div>
+            <nav class="staff-nav" id="staffNav" aria-label="Staff navigation">
+                <a href="/staff.html" class="staff-nav-link">Dashboard</a>
+                <a href="/staff-profile.html" class="staff-profile-button staff-nav-profile" aria-label="Staff Profile" title="Staff Profile" aria-current="page">
+                    <span class="staff-profile-icon" aria-hidden="true">👤</span>
+                </a>
+                <a href="/" class="staff-nav-link staff-logout">Logout</a>
+            </nav>
+        </aside>
 
-    <main class="container">
+        <main class="container staff-main">
         <section class="page-header">
             <h1>Staff Profile</h1>
             <p>View your IT staff account information.</p>
@@ -194,8 +269,8 @@
             <div class="profile-header">
                 <div class="profile-icon">👨‍💻</div>
                 <div>
-                    <h2 id="profileName">IT Support Staff</h2>
-                    <p id="profileDepartment">IT Support Team</p>
+                    <h2 id="profileName"></h2>
+                    <p id="profileDepartment"></p>
                 </div>
             </div>
 
@@ -204,28 +279,65 @@
 
                 <div class="info-row">
                     <div class="info-label">Name</div>
-                    <div class="info-value" id="staffName">IT Support Staff</div>
+                    <div class="info-value" id="staffName"></div>
                 </div>
 
                 <div class="info-row">
                     <div class="info-label">Email</div>
-                    <div class="info-value" id="staffEmail">itadmin@company.com</div>
+                    <div class="info-value" id="staffEmail"></div>
                 </div>
 
                 <div class="info-row">
                     <div class="info-label">Role</div>
-                    <div class="info-value" id="staffRole">IT Support Staff</div>
+                    <div class="info-value" id="staffRole"></div>
                 </div>
 
                 <div class="info-row">
                     <div class="info-label">Department</div>
-                    <div class="info-value" id="staffDepartment">Information Technology</div>
+                    <div class="info-value" id="staffDepartment"></div>
                 </div>
             </div>
 
-            <a href="/staff.html" class="back-button">← Back to Dashboard</a>
+            <p class="profile-status" id="profileStatus" role="status" aria-live="polite"></p>
+
+            <div class="profile-actions">
+                <button class="edit-button" id="editProfileButton" type="button" hidden>Edit profile</button>
+                <a href="/staff.html" class="back-button">Back to Dashboard</a>
+            </div>
+
+            <form class="edit-form" id="editProfileForm" hidden>
+                <h3>Edit account details</h3>
+
+                <div class="form-group">
+                    <label for="editStaffName">Name</label>
+                    <input id="editStaffName" name="name" type="text" maxlength="100" autocomplete="name" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="currentStaffPassword">Current password</label>
+                    <input id="currentStaffPassword" name="currentPassword" type="password" autocomplete="current-password">
+                </div>
+
+                <div class="form-group">
+                    <label for="newStaffPassword">New password</label>
+                    <input id="newStaffPassword" name="newPassword" type="password" minlength="8" maxlength="256" autocomplete="new-password">
+                </div>
+
+                <div class="form-group">
+                    <label for="confirmStaffPassword">Confirm new password</label>
+                    <input id="confirmStaffPassword" name="confirmPassword" type="password" minlength="8" maxlength="256" autocomplete="new-password">
+                </div>
+
+                <p class="form-status" id="editProfileStatus" role="alert" aria-live="assertive"></p>
+
+                <div class="profile-actions">
+                    <button class="save-button" id="saveProfileButton" type="submit">Save changes</button>
+                    <button class="cancel-button" id="cancelProfileButton" type="button">Cancel</button>
+                </div>
+            </form>
         </section>
-    </main>
+        </main>
+    </div>
 
     <script src="/script.js"></script>
 </body>

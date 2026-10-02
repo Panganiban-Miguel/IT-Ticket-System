@@ -92,6 +92,44 @@ if (staffLoginForm) {
 
 }
 
+const staffMenuToggle =
+    document.getElementById("staffMenuToggle");
+
+const staffNavigation =
+    document.getElementById("staffNav");
+
+if (staffMenuToggle && staffNavigation) {
+    function closeStaffMenu() {
+        staffMenuToggle.setAttribute("aria-expanded", "false");
+        staffMenuToggle.setAttribute("aria-label", "Open staff menu");
+        staffNavigation.classList.remove("is-open");
+    }
+
+    staffMenuToggle.addEventListener("click", () => {
+        const isExpanded =
+            staffMenuToggle.getAttribute("aria-expanded") === "true";
+
+        staffMenuToggle.setAttribute("aria-expanded", String(!isExpanded));
+        staffMenuToggle.setAttribute(
+            "aria-label",
+            isExpanded ? "Open staff menu" : "Close staff menu"
+        );
+        staffNavigation.classList.toggle("is-open", !isExpanded);
+    });
+
+    staffNavigation.addEventListener("click", event => {
+        if (event.target.closest("a")) {
+            closeStaffMenu();
+        }
+    });
+
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape") {
+            closeStaffMenu();
+        }
+    });
+}
+
 
 /* =========================================================
    CUSTOMER TICKET FORM
@@ -636,6 +674,38 @@ if (ticketTableBody) {
 }
 
 
+async function deleteTicketWithConfirmation(ticketId) {
+    if (!ticketId) {
+        alert("Ticket ID not found.");
+        return false;
+    }
+
+    if (!window.confirm("Are you sure you want to delete this ticket?")) {
+        return false;
+    }
+
+    try {
+        const response = await fetch(
+            `/api/tickets/${encodeURIComponent(ticketId)}`,
+            { method: "DELETE" }
+        );
+        const result = await response.json();
+
+        if (!response.ok) {
+            alert(result.message || "Failed to delete ticket.");
+            return false;
+        }
+
+        alert(result.message || "Ticket deleted successfully.");
+        return true;
+    } catch (error) {
+        console.error("Delete ticket error:", error);
+        alert("Unable to connect to the server.");
+        return false;
+    }
+}
+
+
 async function loadStaffDashboard() {
 
     try {
@@ -671,6 +741,9 @@ async function loadStaffDashboard() {
         const emptyState =
             document.getElementById("emptyState");
 
+        const mobileTicketList =
+            document.getElementById("mobileTicketList");
+
 
         const ticketCounts = countTicketStatuses(tickets);
 
@@ -693,6 +766,10 @@ async function loadStaffDashboard() {
 
         ticketTableBody.innerHTML = "";
 
+        if (mobileTicketList) {
+            mobileTicketList.innerHTML = "";
+        }
+
 
         if (tickets.length === 0) {
 
@@ -707,6 +784,29 @@ async function loadStaffDashboard() {
 
         if (emptyState) {
             emptyState.style.display = "none";
+        }
+
+
+        let openedSwipe = null;
+
+        function closeOpenedSwipe() {
+            if (!openedSwipe) {
+                return;
+            }
+
+            openedSwipe.entry.classList.remove("is-open");
+            openedSwipe.deleteButton.disabled = true;
+            openedSwipe = null;
+        }
+
+        function revealSwipe(entry, deleteButton) {
+            if (openedSwipe && openedSwipe.entry !== entry) {
+                closeOpenedSwipe();
+            }
+
+            entry.classList.add("is-open");
+            deleteButton.disabled = false;
+            openedSwipe = { entry, deleteButton };
         }
 
 
@@ -761,71 +861,8 @@ async function loadStaffDashboard() {
                 event.preventDefault();
                 event.stopPropagation();
 
-                if (!ticketId) {
-                    alert("Ticket ID not found.");
-                    return;
-                }
-
-                const confirmed =
-                    window.confirm(
-                        "Are you sure you want to delete this ticket?"
-                    );
-
-                if (!confirmed) {
-                    return;
-                }
-
-                try {
-
-                    const response =
-                        await fetch(
-                            `/api/tickets/${encodeURIComponent(ticketId)}`,
-                            {
-                                method: "DELETE"
-                            }
-                        );
-
-                    const result =
-                        await response.json();
-
-                    if (response.ok) {
-                        const refundMessage =
-                            result.refundApplied
-                                ? `Customer refunded ${result.refundedCredits ?? 0} credit(s).`
-                                : "";
-
-                        const successMessage =
-                            result.message ||
-                            "Ticket deleted successfully.";
-
-                        alert(
-                            refundMessage
-                                ? `${successMessage}\n${refundMessage}`
-                                : successMessage
-                        );
-
-                        location.reload();
-
-                    } else {
-
-                        alert(
-                            result.message ||
-                            "Failed to delete ticket."
-                        );
-
-                    }
-
-                } catch (error) {
-
-                    console.error(
-                        "Delete ticket error:",
-                        error
-                    );
-
-                    alert(
-                        "Unable to connect to the server."
-                    );
-
+                if (await deleteTicketWithConfirmation(ticketId)) {
+                    location.reload();
                 }
             });
 
@@ -855,7 +892,181 @@ async function loadStaffDashboard() {
 
             ticketTableBody.appendChild(row);
 
+            if (mobileTicketList) {
+                const swipeEntry = document.createElement("div");
+                swipeEntry.className = "mobile-ticket-swipe";
+
+                const mobileDeleteButton = document.createElement("button");
+                mobileDeleteButton.type = "button";
+                mobileDeleteButton.className = "mobile-ticket-delete";
+                mobileDeleteButton.textContent = "Delete";
+                mobileDeleteButton.setAttribute(
+                    "aria-label",
+                    `Delete ticket ${ticketId}`
+                );
+                mobileDeleteButton.disabled = true;
+                mobileDeleteButton.addEventListener("click", async event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    if (await deleteTicketWithConfirmation(ticketId)) {
+                        location.reload();
+                    }
+                });
+                mobileDeleteButton.addEventListener("keydown", event => {
+                    if (event.key === "Escape") {
+                        closeOpenedSwipe();
+                        mobileCard.focus();
+                    }
+                });
+
+                const mobileCard = document.createElement("a");
+                mobileCard.className = "mobile-ticket-card";
+                mobileCard.href = `/ticket-details.html?ticketId=${encodeURIComponent(ticketId)}`;
+                mobileCard.setAttribute("aria-label", `Open ticket ${ticketId}`);
+
+                const mobileInfo = document.createElement("span");
+                mobileInfo.className = "mobile-ticket-info";
+
+                const mobileId = document.createElement("strong");
+                mobileId.textContent = ticketId;
+
+                const mobileIssue = document.createElement("span");
+                mobileIssue.className = "mobile-ticket-issue";
+                mobileIssue.textContent = ticket.Issue || ticket.issue || "";
+
+                const mobileMeta = document.createElement("span");
+                mobileMeta.className = "mobile-ticket-meta";
+                mobileMeta.textContent = [
+                    ticket["Customer Name"] || ticket.customerName || "",
+                    ticket["Support Type"] || ticket.supportType || ""
+                ].filter(Boolean).join(" · ");
+
+                const mobileStatus = document.createElement("span");
+                mobileStatus.className = "status mobile-ticket-status";
+                mobileStatus.textContent = ticket.Status || ticket.status || "";
+
+                mobileInfo.append(mobileId, mobileIssue, mobileMeta);
+                mobileCard.append(mobileInfo, mobileStatus);
+                swipeEntry.append(mobileDeleteButton, mobileCard);
+
+                let pointerStart = null;
+                let pointerCurrentX = null;
+                let swipeDetected = false;
+                let suppressClickUntil = 0;
+
+                mobileCard.addEventListener("keydown", event => {
+                    if (event.key === "ArrowLeft") {
+                        event.preventDefault();
+                        revealSwipe(swipeEntry, mobileDeleteButton);
+                        mobileDeleteButton.focus();
+                    }
+                });
+
+                mobileCard.addEventListener("click", event => {
+                    if (Date.now() < suppressClickUntil || openedSwipe) {
+                        event.preventDefault();
+                        closeOpenedSwipe();
+                    }
+                });
+
+                mobileCard.addEventListener("pointerdown", event => {
+                    if (event.pointerType === "mouse" && event.button !== 0) {
+                        return;
+                    }
+
+                    mobileCard.setPointerCapture(event.pointerId);
+                    swipeEntry.classList.add("is-dragging");
+                    pointerCurrentX = event.clientX;
+                    pointerStart = {
+                        x: event.clientX,
+                        y: event.clientY,
+                        wasOpen: swipeEntry.classList.contains("is-open")
+                    };
+                    swipeDetected = false;
+                });
+
+                mobileCard.addEventListener("pointermove", event => {
+                    if (!pointerStart) {
+                        return;
+                    }
+
+                    const deltaX = event.clientX - pointerStart.x;
+                    const deltaY = event.clientY - pointerStart.y;
+                    pointerCurrentX = event.clientX;
+
+                    if (
+                        !swipeDetected &&
+                        Math.abs(deltaX) > 8 &&
+                        Math.abs(deltaX) > Math.abs(deltaY)
+                    ) {
+                        swipeDetected = true;
+                    }
+
+                    if (!swipeDetected) {
+                        return;
+                    }
+
+                    event.preventDefault();
+                    const offset = Math.max(
+                        -88,
+                        Math.min(0, (pointerStart.wasOpen ? -88 : 0) + deltaX)
+                    );
+                    mobileCard.style.transform = `translateX(${offset}px)`;
+                });
+
+                mobileCard.addEventListener("pointerup", event => {
+                    if (!pointerStart) {
+                        return;
+                    }
+
+                    const deltaX = event.clientX - pointerStart.x;
+                    if (swipeDetected) {
+                        if (deltaX < -40) {
+                            revealSwipe(swipeEntry, mobileDeleteButton);
+                        } else if (deltaX > 40) {
+                            closeOpenedSwipe();
+                        }
+
+                        suppressClickUntil = Date.now() + 350;
+                    }
+
+                    pointerStart = null;
+                    pointerCurrentX = null;
+                    swipeEntry.classList.remove("is-dragging");
+                    mobileCard.style.transform = "";
+                });
+
+                mobileCard.addEventListener("pointercancel", () => {
+                    if (pointerStart && swipeDetected) {
+                        const deltaX = pointerCurrentX - pointerStart.x;
+                        if (deltaX < -40) {
+                            revealSwipe(swipeEntry, mobileDeleteButton);
+                        } else if (deltaX > 40) {
+                            closeOpenedSwipe();
+                        }
+
+                        suppressClickUntil = Date.now() + 350;
+                    }
+
+                    pointerStart = null;
+                    pointerCurrentX = null;
+                    swipeEntry.classList.remove("is-dragging");
+                    mobileCard.style.transform = "";
+                });
+
+                mobileTicketList.appendChild(swipeEntry);
+            }
+
         });
+
+        if (mobileTicketList) {
+            mobileTicketList.addEventListener("click", event => {
+                if (openedSwipe && !openedSwipe.entry.contains(event.target)) {
+                    closeOpenedSwipe();
+                }
+            });
+        }
 
 
     } catch (error) {
@@ -885,77 +1096,157 @@ if (profileName) {
 
 
 async function loadStaffProfile() {
+    try {
+        const response = await fetch("/api/staff/profile");
+        const data = await response.json();
 
-    const staffData =
-        localStorage.getItem("staff");
+        if (response.status === 401) {
+            localStorage.removeItem("staff");
+            window.location.href = "/staff-login.html";
+            return;
+        }
 
+        if (!response.ok) {
+            throw new Error(data.message || "Unable to load staff profile.");
+        }
 
-    if (!staffData) {
-
-        alert("Please log in first.");
-
-        window.location.href =
-            "/staff-login.html";
-
-        return;
-
+        displayStaffProfile(data.staff);
+    } catch (error) {
+        console.error("Staff profile error:", error);
+        const status = document.getElementById("profileStatus");
+        if (status) {
+            status.textContent = "Unable to load your profile. Please try again.";
+            status.setAttribute("role", "alert");
+        }
     }
-
-
-    const staff =
-        JSON.parse(staffData);
-
-
-    const profileName =
-        document.getElementById("profileName");
-
-    const profileDepartment =
-        document.getElementById("profileDepartment");
-
-    const staffName =
-        document.getElementById("staffName");
-
-    const staffEmail =
-        document.getElementById("staffEmail");
-
-    const staffRole =
-        document.getElementById("staffRole");
-
-    const staffDepartment =
-        document.getElementById("staffDepartment");
-
-
-    if (profileName) {
-        profileName.textContent =
-            staff.name || "";
-    }
-
-    if (profileDepartment) {
-        profileDepartment.textContent =
-            staff.department || "";
-    }
-
-    if (staffName) {
-        staffName.textContent =
-            staff.name || "";
-    }
-
-    if (staffEmail) {
-        staffEmail.textContent =
-            staff.email || "";
-    }
-
-    if (staffRole) {
-        staffRole.textContent =
-            staff.role || "";
-    }
-
-    if (staffDepartment) {
-        staffDepartment.textContent =
-            staff.department || "";
-    }
-
 }
+
+function displayStaffProfile(staff) {
+    const fields = {
+        profileName: staff.name,
+        profileDepartment: staff.department,
+        staffName: staff.name,
+        staffEmail: staff.email,
+        staffRole: staff.role,
+        staffDepartment: staff.department
+    };
+
+    Object.entries(fields).forEach(([id, value]) => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.textContent = value || "";
+        }
+    });
+
+    localStorage.setItem("staff", JSON.stringify(staff));
+
+    const editProfileButton = document.getElementById("editProfileButton");
+    if (editProfileButton) {
+        editProfileButton.hidden = false;
+    }
+}
+
+const editProfileForm = document.getElementById("editProfileForm");
+
+if (editProfileForm) {
+    const editProfileButton = document.getElementById("editProfileButton");
+    const cancelProfileButton = document.getElementById("cancelProfileButton");
+    const saveProfileButton = document.getElementById("saveProfileButton");
+    const editStaffName = document.getElementById("editStaffName");
+    const currentStaffPassword = document.getElementById("currentStaffPassword");
+    const newStaffPassword = document.getElementById("newStaffPassword");
+    const confirmStaffPassword = document.getElementById("confirmStaffPassword");
+    const editProfileStatus = document.getElementById("editProfileStatus");
+    const profileStatus = document.getElementById("profileStatus");
+
+    editProfileButton.addEventListener("click", () => {
+        editStaffName.value = document.getElementById("staffName").textContent;
+        editProfileStatus.textContent = "";
+        profileStatus.textContent = "";
+        editProfileForm.hidden = false;
+        editProfileButton.hidden = true;
+        editStaffName.focus();
+    });
+
+    cancelProfileButton.addEventListener("click", () => {
+        editProfileForm.reset();
+        editProfileForm.hidden = true;
+        editProfileButton.hidden = false;
+        editProfileStatus.textContent = "";
+    });
+
+    editProfileForm.addEventListener("submit", async event => {
+        event.preventDefault();
+        editProfileStatus.textContent = "";
+
+        const currentPassword = currentStaffPassword.value;
+        const newPassword = newStaffPassword.value;
+        const confirmPassword = confirmStaffPassword.value;
+        const changingPassword = Boolean(currentPassword || newPassword || confirmPassword);
+
+        if (changingPassword && (!currentPassword || !newPassword || !confirmPassword)) {
+            editProfileStatus.textContent = "Enter your current password and the new password twice.";
+            return;
+        }
+
+        if (changingPassword && newPassword !== confirmPassword) {
+            editProfileStatus.textContent = "The new passwords do not match.";
+            confirmStaffPassword.focus();
+            return;
+        }
+
+        saveProfileButton.disabled = true;
+        try {
+            const response = await fetch("/api/staff/profile", {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    name: editStaffName.value,
+                    currentPassword,
+                    newPassword,
+                    confirmPassword
+                })
+            });
+            const data = await response.json();
+
+            if (response.status === 401) {
+                localStorage.removeItem("staff");
+                window.location.href = "/staff-login.html";
+                return;
+            }
+
+            if (!response.ok) {
+                editProfileStatus.textContent = data.message || "Unable to update your profile.";
+                return;
+            }
+
+            displayStaffProfile(data.staff);
+            editProfileForm.reset();
+            editProfileForm.hidden = true;
+            editProfileButton.hidden = false;
+            profileStatus.textContent = data.message;
+        } catch (error) {
+            console.error("Update staff profile error:", error);
+            editProfileStatus.textContent = "Unable to update your profile. Please try again.";
+        } finally {
+            saveProfileButton.disabled = false;
+        }
+    });
+}
+
+document.querySelectorAll(".staff-logout").forEach(link => {
+    link.addEventListener("click", async event => {
+        event.preventDefault();
+        try {
+            await fetch("/api/staff/logout", { method: "POST" });
+        } catch (error) {
+            console.error("Staff logout error:", error);
+        } finally {
+            localStorage.removeItem("staff");
+            window.location.href = "/";
+        }
+    });
+});
 
 
 /* =========================================================

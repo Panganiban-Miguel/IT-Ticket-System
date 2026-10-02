@@ -19,7 +19,7 @@
     .back-link {
         display: inline-block;
         margin-bottom: 25px;
-        color: #0B2163;
+        color: #25448F;
         text-decoration: none;
         font-size: 14px;
         font-weight: bold;
@@ -27,6 +27,12 @@
 
     .back-link:hover {
         text-decoration: underline;
+    }
+
+    #serviceReportActionButton:hover,
+    #serviceReportSubmitButton:hover,
+    #reportModal button[onclick="window.print()"]:hover {
+        background: #25448F !important;
     }
 
     .ticket-header {
@@ -117,7 +123,7 @@
 
     select:focus,
     textarea:focus {
-        border-color: #1769aa;
+        border-color: #0B2163;
     }
 
     textarea {
@@ -133,10 +139,6 @@
         .content-grid {
             grid-template-columns: 1fr;
         }
-
-        .navbar {
-            padding: 0 20px;
-        }
     }
 
     </style>
@@ -147,51 +149,27 @@
 <body>
 
 
-<!-- =========================
-     NAVBAR
-========================= -->
+<div class="staff-layout">
+    <aside class="staff-sidebar">
+        <div class="staff-sidebar-header">
+            <button class="staff-menu-toggle" id="staffMenuToggle" type="button" aria-expanded="false" aria-controls="staffNav" aria-label="Open staff menu">
+                <span class="staff-menu-icon" aria-hidden="true"></span>
+            </button>
+            <div class="staff-brand">IT Support</div>
+            <a href="/staff-profile.html" class="staff-profile-button staff-mobile-profile" aria-label="Staff Profile" title="Staff Profile">
+                <span class="staff-profile-icon" aria-hidden="true">👤</span>
+            </a>
+        </div>
+        <nav class="staff-nav" id="staffNav" aria-label="Staff navigation">
+            <a href="/staff.html" class="staff-nav-link" aria-current="location">Dashboard</a>
+            <a href="/staff-profile.html" class="staff-profile-button staff-nav-profile" aria-label="Staff Profile" title="Staff Profile">
+                <span class="staff-profile-icon" aria-hidden="true">👤</span>
+            </a>
+            <a href="/" class="staff-nav-link staff-logout">Logout</a>
+        </nav>
+    </aside>
 
-<nav class="navbar">
-
-    <div class="logo">
-        IT Support
-    </div>
-
-
-    <div class="nav-right">
-
-        <a
-            href="/staff.html"
-            class="nav-link"
-        >
-            Dashboard
-        </a>
-
-        <a
-            href="/staff-profile.html"
-            class="nav-link"
-        >
-            Staff Profile
-        </a>
-
-        <a
-            href="/"
-            class="nav-link"
-        >
-            Logout
-        </a>
-
-    </div>
-
-</nav>
-
-
-
-<!-- =========================
-     MAIN
-========================= -->
-
-<main class="container">
+    <main class="container staff-main">
 
     <!-- =========================
          TICKET HEADER
@@ -355,7 +333,7 @@
                         id="serviceReportActionButton"
                         class="button"
                         type="button"
-                        style="background: #0284c7; color: white;"
+                        style="background: #0B2163; color: white;"
                     >
                         Loading...
                     </button>
@@ -482,7 +460,7 @@
     >
         <div style="background: white; max-width: 650px; width: 100%; border-radius: 12px; padding: 30px; max-height: 90vh; overflow-y: auto;">
             <div id="printableReport">
-                <h2 style="color: #1769aa; margin-bottom: 5px;">SERVICE REPORT</h2>
+                <h2 style="color: #0B2163; margin-bottom: 5px;">SERVICE REPORT</h2>
                 <p style="color: #6b7280; font-size: 13px; margin-bottom: 15px;">IT Support Resolution Summary</p>
                 <table style="width: 100%; border-collapse: collapse;">
                     <tr>
@@ -522,7 +500,7 @@
                         <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;" id="repTime"></td>
                     </tr>
                     <tr>
-                        <td style="padding: 8px; border-bottom: 1px solid #e5e7eb; font-weight: bold; color: #1769aa;">Hours Spent:</td>
+                        <td style="padding: 8px; border-bottom: 1px solid #e5e7eb; font-weight: bold; color: #0B2163;">Hours Spent:</td>
                         <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;" id="repHours"></td>
                     </tr>
                     <tr>
@@ -536,8 +514,8 @@
                 </table>
             </div>
             <div style="display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap;">
-                <button type="button" class="button" style="background: #1769aa; color: white;" onclick="window.print()">Print / Save PDF</button>
-                <button type="button" class="button" style="background: #dbeafe; color: #1e3a8a;" onclick="openEditServiceReportForm()">Edit</button>
+                <button type="button" class="button" style="background: #0B2163; color: white;" onclick="window.print()">Print / Save PDF</button>
+                <button type="button" class="button" style="background: #f3f4f6; color: #0B2163;" onclick="openEditServiceReportForm()">Edit</button>
                 <button type="button" class="button" style="background: #ef4444; color: white;" onclick="deleteCurrentServiceReport()">Delete</button>
                 <button type="button" class="button" style="background: #e5e7eb; color: #374151;" onclick="closeServiceReportModal()">Close</button>
             </div>
@@ -550,7 +528,7 @@
         style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); align-items: center; justify-content: center; padding: 20px; z-index: 1100;"
     >
         <div style="background: white; max-width: 680px; width: 100%; border-radius: 12px; padding: 30px; max-height: 90vh; overflow-y: auto;">
-            <h2 id="serviceReportFormTitle" style="color: #1769aa; margin-bottom: 20px;">Create Service Report</h2>
+            <h2 id="serviceReportFormTitle" style="color: #0B2163; margin-bottom: 20px;">Create Service Report</h2>
 
             <form id="serviceReportForm">
                 <div class="form-group">
@@ -596,13 +574,14 @@
 
                 <div style="display: flex; gap: 10px; margin-top: 20px; justify-content: flex-end; flex-wrap: wrap;">
                     <button type="button" class="button" style="background: #e5e7eb; color: #374151;" onclick="closeServiceReportFormModal()">Cancel</button>
-                    <button id="serviceReportSubmitButton" type="submit" class="button" style="background: #1769aa; color: white;">Submit Service Report</button>
+                    <button id="serviceReportSubmitButton" type="submit" class="button" style="background: #0B2163; color: white;">Submit Service Report</button>
                 </div>
             </form>
         </div>
     </div>
 
 </main>
+</div>
 
 <script src="/script.js"></script>
 

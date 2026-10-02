@@ -27,6 +27,10 @@ const initialTicket = {
     "Appointment Status": "Pending",
     "Service Result": ""
 };
+const staffCredentials = {
+    email: "staff@example.test",
+    password: "test-only-password"
+};
 
 let server;
 let baseUrl;
@@ -70,8 +74,31 @@ function writeWorkbook({ includeCustomerSheet = true } = {}) {
         }]),
         "ServiceReport"
     );
+    XLSX.utils.book_append_sheet(
+        workbook,
+        XLSX.utils.json_to_sheet([{
+            "Staff ID": "S-100",
+            Name: "Test Staff",
+            Email: staffCredentials.email,
+            Password: staffCredentials.password,
+            Role: "Engineer",
+            Department: "IT"
+        }]),
+        "Staff"
+    );
 
     XLSX.writeFile(workbook, databasePath);
+}
+
+async function loginStaff() {
+    const response = await fetch(`${baseUrl}/api/staff/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(staffCredentials)
+    });
+
+    assert.equal(response.status, 200);
+    return response.headers.get("set-cookie").split(";")[0];
 }
 
 before(async () => {
@@ -181,6 +208,34 @@ test("GET /api/tickets/:ticketId returns a ticket or 404", async t => {
         assert.equal(response.status, 404);
         assert.equal(body.message, "Ticket not found.");
     });
+});
+
+test("DELETE /api/tickets/:ticketId requires a staff session", async () => {
+    const response = await fetch(`${baseUrl}/api/tickets/T-100`, {
+        method: "DELETE"
+    });
+    const body = await response.json();
+    const workbook = XLSX.readFile(databasePath);
+    const tickets = XLSX.utils.sheet_to_json(workbook.Sheets.Ticket);
+
+    assert.equal(response.status, 401);
+    assert.equal(body.message, "Please log in to continue.");
+    assert.equal(tickets.length, 1);
+});
+
+test("DELETE /api/tickets/:ticketId deletes a ticket for authenticated staff", async () => {
+    const cookie = await loginStaff();
+    const response = await fetch(`${baseUrl}/api/tickets/T-100`, {
+        method: "DELETE",
+        headers: { Cookie: cookie }
+    });
+    const body = await response.json();
+    const workbook = XLSX.readFile(databasePath);
+    const tickets = XLSX.utils.sheet_to_json(workbook.Sheets.Ticket);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.message, "Ticket deleted successfully.");
+    assert.equal(tickets.length, 0);
 });
 
 test("PUT /api/tickets/:ticketId updates and persists ticket fields", async () => {

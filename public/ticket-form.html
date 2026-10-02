@@ -42,7 +42,7 @@
         }
 
         .back-link:hover {
-            color: #1769aa;
+            color: #25448F;
         }
 
         .container {
@@ -95,7 +95,7 @@
         input:focus,
         textarea:focus,
         select:focus {
-            border-color: #1769aa;
+                    border-color: #0B2163;
         }
 
         textarea {
@@ -122,7 +122,7 @@
             padding: 13px;
             border: none;
             border-radius: 8px;
-            background: #1769aa;
+            background: #0B2163;
             color: white;
             font-size: 15px;
             font-weight: bold;
@@ -131,13 +131,13 @@
         }
 
         button:hover {
-            background: #12578c;
+            background: #25448F;
         }
 
         #ticketMessage {
             margin-top: 20px;
             font-size: 14px;
-            color: #1769aa;
+            color: #0B2163;
             text-align: center;
         }
 
@@ -159,7 +159,6 @@
 <body>
     <nav class="navbar">
         <div class="logo">IT Support</div>
-        <a href="/staff.html" class="back-link">← Back to Staff Portal</a>
     </nav>
 
     <main class="container">
@@ -224,6 +223,9 @@
                 </div>
 
                 <button type="submit">Submit Ticket</button>
+                <a href="/staff.html">
+                    <button type="button" id="backButton">Back</button>
+                </a>
                 <div id="ticketMessage"></div>
             </form>
         </div>
