@@ -6,7 +6,7 @@ const XLSX = require("xlsx");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const excelDir = path.join(
+const excelDir = process.env.IT_TICKET_DATABASE_DIR || path.join(
     __dirname,
     "Database"
 );
@@ -163,6 +163,221 @@ function normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
 }
 
+function validateOptionalText(value, fieldName, maxLength) {
+    if (value === undefined || value === null) {
+        return null;
+    }
+
+    if (typeof value !== "string") {
+        return `${fieldName} must be text.`;
+    }
+
+    if (value.length > maxLength) {
+        return `${fieldName} must be ${maxLength} characters or fewer.`;
+    }
+
+    return null;
+}
+
+function validateTicketCreation(body) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return "Request body must be a JSON object.";
+    }
+
+    const supportTypes = [
+        "Phone Support",
+        "Email Support",
+        "Remote Support",
+        "On-site Support"
+    ];
+    const textFields = [
+        ["customerName", "Customer name", 120],
+        ["email", "Email", 254],
+        ["customerId", "Customer ID", 64],
+        ["issue", "Issue", 5000],
+        ["supportType", "Support type", 40],
+        ["onSiteSupportType", "On-site support type", 20],
+        ["appointmentDate", "Appointment date", 10],
+        ["appointmentTime", "Appointment time", 5]
+    ];
+
+    for (const [field, label, maxLength] of textFields) {
+        const validationMessage = validateOptionalText(body[field], label, maxLength);
+        if (validationMessage) {
+            return validationMessage;
+        }
+    }
+
+    if (!body.issue || !body.issue.trim() || !body.supportType || !body.supportType.trim()) {
+        return "Please provide an issue and support type.";
+    }
+
+    if (!body.customerId && !body.email) {
+        return "Please provide a customer ID or email.";
+    }
+
+    if (body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim())) {
+        return "Please provide a valid email address.";
+    }
+
+    if (!supportTypes.includes(body.supportType.trim())) {
+        return "Please select a valid support type.";
+    }
+
+    if (
+        body.appointmentDuration !== undefined &&
+        body.appointmentDuration !== null &&
+        typeof body.appointmentDuration !== "string" &&
+        typeof body.appointmentDuration !== "number"
+    ) {
+        return "Appointment duration must be a number.";
+    }
+
+    if (
+        body.appointmentDuration !== undefined &&
+        body.appointmentDuration !== null &&
+        String(body.appointmentDuration).trim() !== "" &&
+        !Number.isFinite(Number(body.appointmentDuration))
+    ) {
+        return "Appointment duration must be a valid number.";
+    }
+
+    return null;
+}
+
+function validateTicketUpdate(body) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return "Request body must be a JSON object.";
+    }
+
+    const textFields = [
+        ["assignedEngineer", "Assigned engineer", 120],
+        ["serviceResult", "Service result", 5000],
+        ["customerName", "Customer name", 120],
+        ["email", "Email", 254],
+        ["customerId", "Customer ID", 64]
+    ];
+
+    for (const [field, label, maxLength] of textFields) {
+        const validationMessage = validateOptionalText(body[field], label, maxLength);
+        if (validationMessage) {
+            return validationMessage;
+        }
+    }
+
+    if (body.status !== undefined && !["Open", "In Progress", "Pending", "Closed"].includes(body.status)) {
+        return "Please select a valid ticket status.";
+    }
+
+    if (
+        body.appointmentStatus !== undefined &&
+        body.appointmentStatus !== "" &&
+        !["Pending", "Confirmed", "Reschedule Required"].includes(body.appointmentStatus)
+    ) {
+        return "Please select a valid appointment status.";
+    }
+
+    return null;
+}
+
+function validateServiceReport(body) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return "Request body must be a JSON object.";
+    }
+
+    const textFields = [
+        ["engineer", "Engineer", 120],
+        ["tasksDone", "Tasks done", 5000],
+        ["resolution", "Resolution", 5000],
+        ["serviceMode", "Service mode", 30],
+        ["date", "Service date", 10],
+        ["signInTime", "Sign-in time", 5],
+        ["signOutTime", "Sign-out time", 5]
+    ];
+
+    for (const [field, label, maxLength] of textFields) {
+        const validationMessage = validateOptionalText(body[field], label, maxLength);
+        if (validationMessage) {
+            return validationMessage;
+        }
+    }
+
+    if (
+        body.serviceMode !== undefined &&
+        body.serviceMode !== "" &&
+        ![
+            "on-site",
+            "onsite",
+            "on site",
+            "yes",
+            "visit",
+            "on-site visit",
+            "remote",
+            "remote support",
+            "off-site",
+            "offsite",
+            "no",
+            "hybrid",
+            "hybrid support"
+        ].includes(body.serviceMode.trim().toLowerCase())
+    ) {
+        return "Please select a valid service mode.";
+    }
+
+    if (body.date !== undefined && body.date !== "") {
+        const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(body.date);
+        if (!dateMatch) {
+            return "Please provide a valid service date.";
+        }
+
+        const date = new Date(Date.UTC(
+            Number(dateMatch[1]),
+            Number(dateMatch[2]) - 1,
+            Number(dateMatch[3])
+        ));
+        if (
+            date.getUTCFullYear() !== Number(dateMatch[1]) ||
+            date.getUTCMonth() !== Number(dateMatch[2]) - 1 ||
+            date.getUTCDate() !== Number(dateMatch[3])
+        ) {
+            return "Please provide a valid service date.";
+        }
+    }
+
+    for (const [field, label] of [["signInTime", "Sign-in time"], ["signOutTime", "Sign-out time"]]) {
+        if (body[field] !== undefined && body[field] !== "" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(body[field])) {
+            return `${label} must use HH:MM format.`;
+        }
+    }
+
+    if (body.onsite !== undefined && typeof body.onsite !== "boolean") {
+        const legacyOnsiteValues = [
+            "on-site",
+            "onsite",
+            "on site",
+            "yes",
+            "visit",
+            "on-site visit",
+            "remote",
+            "remote support",
+            "off-site",
+            "offsite",
+            "no",
+            "hybrid",
+            "hybrid support"
+        ];
+
+        if (
+            typeof body.onsite !== "string" ||
+            !legacyOnsiteValues.includes(body.onsite.trim().toLowerCase())
+        ) {
+            return "On-site indicator must be a boolean or a supported legacy service-mode value.";
+        }
+    }
+
+    return null;
+}
+
 function getNextCustomerId(customersData) {
     let candidate = 1;
 
@@ -317,7 +532,19 @@ function repairMissingCustomerLinks(workbook) {
    MIDDLEWARE
 ========================= */
 
-app.use(express.json());
+app.use((req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    );
+    next();
+});
+
+app.use(express.json({ limit: "32kb" }));
 
 app.use(
     express.static(
@@ -543,11 +770,455 @@ app.post("/api/staff/login", (req, res) => {
 ========================================================= */
 
 app.post("/api/tickets", (req, res) => {
-    return res.status(410).json({
-        message: "Customer ticket submission is currently disabled."
-    });
-});
 
+    try {
+
+        const validationMessage = validateTicketCreation(req.body);
+        if (validationMessage) {
+            return res.status(400).json({ message: validationMessage });
+        }
+
+        const workbook =
+            XLSX.readFile(excelFile);
+
+
+        /* =========================
+           GET CUSTOMER DATA
+        ========================= */
+
+        const customerWorksheet =
+            workbook.Sheets["Customer"];
+
+
+        if (!customerWorksheet) {
+
+            return res.status(500).json({
+
+                message:
+                    "Customer sheet not found."
+
+            });
+
+        }
+
+
+        const customersData =
+            XLSX.utils.sheet_to_json(
+                customerWorksheet
+            );
+
+
+        const submittedCustomerId =
+            req.body.customerId;
+
+        const supportTypeValue =
+            String(req.body.supportType || "").trim();
+
+        const isOnSiteSupportRequest =
+            supportTypeValue.toLowerCase() ===
+            "on-site support";
+
+        const submittedEmail =
+            String(req.body.email || "").trim();
+
+        const submittedName =
+            String(req.body.customerName || "").trim();
+
+        const customerResolution =
+            resolveCustomerForTicket(
+                customersData,
+                submittedCustomerId,
+                submittedEmail,
+                submittedName
+            );
+
+
+        if (customerResolution.reason) {
+            return res.status(404).json({
+                message: customerResolution.reason
+            });
+        }
+
+
+        const customer =
+            customerResolution.customer;
+
+        const customerIndex =
+            customerResolution.customerIndex;
+
+
+        if (!customer) {
+            return res.status(400).json({
+                message: "Customer is required."
+            });
+        }
+
+
+        /* =========================
+           GET APPOINTMENT DURATION
+        ========================= */
+
+        let appointmentDuration = null;
+        let originalAppointmentDuration = null;
+        let roundedDurationNotice = null;
+        const onSiteSupportType =
+            String(
+                req.body.onSiteSupportType || ""
+            ).trim();
+
+
+        if (isOnSiteSupportRequest) {
+
+            if (!onSiteSupportType) {
+
+                return res.status(400).json({
+
+                    message:
+                        "Please select an on-site support type."
+
+                });
+
+            }
+
+            const appointmentDate = String(req.body.appointmentDate || "").trim();
+            const appointmentTime = String(req.body.appointmentTime || "").trim();
+            const appointmentValidationMessage = validateAppointmentDateTime(
+                appointmentDate,
+                appointmentTime
+            );
+
+            if (appointmentValidationMessage) {
+                return res.status(400).json({
+                    message: appointmentValidationMessage
+                });
+            }
+
+            let minimumHours = 0;
+
+            if (onSiteSupportType === "Maintenance") {
+                minimumHours = 1;
+            } else if (onSiteSupportType === "Ad Hoc") {
+                minimumHours = 2;
+            } else if (onSiteSupportType === "Project") {
+                minimumHours = 0;
+            } else {
+                return res.status(400).json({
+
+                    message:
+                        "Invalid on-site support type selected."
+
+                });
+            }
+
+            originalAppointmentDuration =
+                parseFloat(
+                    req.body.appointmentDuration
+                );
+
+            appointmentDuration = originalAppointmentDuration;
+
+
+            /* =========================
+               CHECK DURATION
+            ========================= */
+
+            if (onSiteSupportType === "Project") {
+                if (
+                    !Number.isFinite(appointmentDuration) ||
+                    !Number.isInteger(appointmentDuration) ||
+                    appointmentDuration < 1
+                ) {
+                    return res.status(400).json({
+                        message:
+                            "Project duration is required and must be a whole number of days (minimum 1 day)."
+                    });
+                }
+            } else {
+                if (
+                    !Number.isFinite(
+                        appointmentDuration
+                    ) ||
+                    appointmentDuration < minimumHours
+                ) {
+
+                    return res.status(400).json({
+
+                        message:
+                            `On-site Support (${onSiteSupportType}) requires a minimum duration of ${minimumHours} hour(s).`
+
+                    });
+
+                }
+
+
+                /* =========================
+                   ROUND UP TO 0.5 HOUR INCREMENTS
+                ========================= */
+
+                if (
+                    !Number.isInteger(
+                        appointmentDuration * 2
+                    )
+                ) {
+                    const roundedDuration =
+                        Math.ceil(
+                            appointmentDuration * 2
+                        ) / 2;
+
+                    appointmentDuration = roundedDuration;
+                    roundedDurationNotice =
+                        `Duration was rounded up from ${originalAppointmentDuration} hour(s) to ${appointmentDuration} hour(s). This increases the credit cost to ${appointmentDuration} credit(s).`;
+                }
+            }
+
+        }
+
+
+        /* =========================
+           GET CUSTOMER CREDITS
+        ========================= */
+
+        let currentCredits = 0;
+
+
+        if (customer) {
+
+            currentCredits =
+                Number(
+                    customer["Credits"] || 0
+                );
+
+        }
+
+
+        /* =========================
+           CHECK CREDITS
+        ========================= */
+
+        if (
+            customer &&
+            isOnSiteSupportRequest &&
+            onSiteSupportType !== "Project" &&
+            currentCredits <
+            appointmentDuration
+        ) {
+
+            return res.status(400).json({
+
+                message:
+                    "The customer only has " +
+                    currentCredits +
+                    " credit(s), but requested " +
+                    appointmentDuration +
+                    " hour(s)."
+
+            });
+
+        }
+
+
+        /* =========================
+           DEDUCT CREDITS
+        ========================= */
+
+        let remainingCredits =
+            currentCredits;
+
+
+        if (
+            customer &&
+            isOnSiteSupportRequest &&
+            onSiteSupportType !== "Project"
+        ) {
+
+            remainingCredits =
+                currentCredits -
+                appointmentDuration;
+
+
+            customersData[customerIndex]["Credits"] =
+                remainingCredits;
+
+        }
+
+
+        /* =========================
+           SAVE CUSTOMER SHEET
+        ========================= */
+
+        workbook.Sheets["Customer"] =
+            XLSX.utils.json_to_sheet(
+                customersData
+            );
+
+
+        /* =========================
+           GET TICKET DATA
+        ========================= */
+
+        const ticketWorksheet =
+            workbook.Sheets["Ticket"];
+
+
+        if (!ticketWorksheet) {
+
+            return res.status(500).json({
+
+                message:
+                    "Ticket sheet not found."
+
+            });
+
+        }
+
+
+        const ticketsData =
+            XLSX.utils.sheet_to_json(
+                ticketWorksheet
+            );
+
+
+        /* =========================
+           CREATE TICKET
+        ========================= */
+
+        const ticket = {
+
+            "Ticket ID":
+                "T-" + Date.now(),
+
+            "Customer ID":
+                customer["Customer ID"] || "",
+
+            "Customer Name":
+                customer.Name || submittedName || "",
+
+            "Email":
+                customer.Email || submittedEmail || "",
+
+            "Issue":
+                req.body.issue || "",
+
+            "Support Type":
+                supportTypeValue,
+
+            "On-site Support Type":
+                isOnSiteSupportRequest
+                    ? onSiteSupportType
+                    : "",
+
+            "Status":
+                "Open",
+
+            "Assigned Engineer":
+                "",
+
+            "Appointment Date":
+                isOnSiteSupportRequest
+                    ? req.body.appointmentDate
+                    : "",
+
+            "Appointment Time":
+                isOnSiteSupportRequest
+                    ? req.body.appointmentTime
+                    : "",
+
+            "Appointment Duration":
+                appointmentDuration,
+
+            "Appointment Status":
+                "Pending",
+
+            "Created Date":
+                new Date().toISOString(),
+
+            "Service Result":
+                ""
+
+        };
+
+
+        /* =========================
+           ADD TICKET
+        ========================= */
+
+        ticketsData.push(ticket);
+
+
+        /* =========================
+           SAVE TICKET SHEET
+        ========================= */
+
+        workbook.Sheets["Ticket"] =
+            XLSX.utils.json_to_sheet(
+                ticketsData
+            );
+
+
+        /* =========================
+           SAVE EXCEL FILE
+        ========================= */
+
+        writeWorkbook(workbook);
+
+        console.log(
+            "New ticket saved to Excel:",
+            ticket
+        );
+
+
+        console.log(
+            "Customer credits:",
+            currentCredits,
+            "->",
+            remainingCredits
+        );
+
+
+        /* =========================
+           SEND RESPONSE
+        ========================= */
+
+        res.status(201).json({
+
+            message:
+                roundedDurationNotice ||
+                "Ticket created successfully.",
+
+            ticketId:
+                ticket["Ticket ID"],
+
+            remainingCredits:
+                remainingCredits,
+
+            originalDuration:
+                originalAppointmentDuration || null,
+
+            roundedDuration:
+                appointmentDuration,
+
+            roundUpApplied:
+                !!roundedDurationNotice
+
+        });
+
+    } catch (error) {
+
+        console.error(
+            "Create ticket error:",
+            error
+        );
+
+        res.status(500).json({
+
+            message:
+                "Unable to create ticket."
+
+        });
+
+    }
+
+});
 
 /* =========================================================
    GET ALL TICKETS
@@ -729,6 +1400,11 @@ app.put(
     (req, res) => {
 
         try {
+
+            const validationMessage = validateTicketUpdate(req.body);
+            if (validationMessage) {
+                return res.status(400).json({ message: validationMessage });
+            }
 
             const ticketId =
                 req.params.ticketId;
@@ -924,6 +1600,10 @@ app.put(
                         message: error.message
                     });
                 }
+
+                return res.status(500).json({
+                    message: "Unable to update ticket."
+                });
 
         }
 
@@ -1487,6 +2167,11 @@ app.post(
 
         try {
 
+            const validationMessage = validateServiceReport(req.body);
+            if (validationMessage) {
+                return res.status(400).json({ message: validationMessage });
+            }
+
             const ticketId = req.params.ticketId;
             const {
                 onsite,
@@ -1570,6 +2255,12 @@ app.put(
     "/api/tickets/:ticketId/service-report",
     (req, res) => {
         try {
+
+            const validationMessage = validateServiceReport(req.body);
+            if (validationMessage) {
+                return res.status(400).json({ message: validationMessage });
+            }
+
             const ticketId = req.params.ticketId;
             const {
                 onsite,
@@ -1766,34 +2457,57 @@ app.get(
 );
 
 
+app.use((error, req, res, next) => {
+    if (error && error.type === "entity.too.large") {
+        return res.status(413).json({
+            message: "Request body exceeds the 32 KB limit."
+        });
+    }
+
+    if (error && error.type === "entity.parse.failed") {
+        return res.status(400).json({
+            message: "Request body must contain valid JSON."
+        });
+    }
+
+    return res.status(500).json({
+        message: "Unable to process request."
+    });
+});
+
+
 /* =========================================================
    START SERVER
 ========================================================= */
 
-try {
-    const startupWorkbook = XLSX.readFile(excelFile);
-    const startupRepair = repairMissingCustomerLinks(startupWorkbook);
+if (require.main === module) {
+    try {
+        const startupWorkbook = XLSX.readFile(excelFile);
+        const startupRepair = repairMissingCustomerLinks(startupWorkbook);
 
-    if (startupRepair.changed) {
-        console.log(
-            `Startup repair fixed ${startupRepair.fixedCount} orphaned or missing customer ticket link(s).`
+        if (startupRepair.changed) {
+            console.log(
+                `Startup repair fixed ${startupRepair.fixedCount} orphaned or missing customer ticket link(s).`
+            );
+        }
+    } catch (error) {
+        console.error(
+            "Startup customer repair error:",
+            error
         );
     }
-} catch (error) {
-    console.error(
-        "Startup customer repair error:",
-        error
+
+    app.listen(
+        PORT,
+        "0.0.0.0",
+        () => {
+
+            console.log(
+                `IT Ticketing System running on http://localhost:${PORT}`
+            );
+
+        }
     );
 }
 
-app.listen(
-    PORT,
-    "0.0.0.0",
-    () => {
-
-        console.log(
-            `IT Ticketing System running on http://localhost:${PORT}`
-        );
-
-    }
-);
+module.exports = app;
