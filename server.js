@@ -6,7 +6,7 @@ const XLSX = require("xlsx");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const excelDir = path.join(
+const excelDir = process.env.IT_TICKET_DATABASE_DIR || path.join(
     __dirname,
     "Database"
 );
@@ -358,7 +358,19 @@ function repairMissingCustomerLinks(workbook) {
    MIDDLEWARE
 ========================= */
 
-app.use(express.json());
+app.use((req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    );
+    next();
+});
+
+app.use(express.json({ limit: "32kb" }));
 
 app.use(
     express.static(
@@ -385,135 +397,20 @@ app.get("/", (req, res) => {
 
 
 /* =========================================================
-   CUSTOMER SIGN UP
+   DISABLED CUSTOMER-FACING AREA
+   =========================================
+   Legacy customer UX and customer APIs are intentionally disabled.
+   The original logic has been preserved in-place for later re-enable,
+   but the active routes below now fail fast instead of running.
+
+   To restore the old behavior, remove the disabled stubs and re-enable
+   the original customer handlers.
 ========================================================= */
 
 app.post("/api/customers/signup", (req, res) => {
-
-    try {
-
-        const {
-            name,
-            email,
-            password
-        } = req.body;
-
-
-        if (!name || !email || !password) {
-
-            return res.status(400).json({
-                message: "Please fill in all fields."
-            });
-
-        }
-
-
-        const workbook =
-            XLSX.readFile(excelFile);
-
-        const worksheet =
-            workbook.Sheets["Customer"];
-
-
-        if (!worksheet) {
-
-            return res.status(500).json({
-                message: "Customer sheet not found."
-            });
-
-        }
-
-
-        const customersData =
-            XLSX.utils.sheet_to_json(
-                worksheet
-            );
-
-
-        const existingCustomer =
-            customersData.find(
-                customer =>
-                    String(
-                        customer.Email || ""
-                    ).trim().toLowerCase() ===
-                    String(email)
-                        .trim()
-                        .toLowerCase()
-            );
-
-
-        if (existingCustomer) {
-
-            return res.status(400).json({
-
-                message:
-                    "An account with this email already exists."
-
-            });
-
-        }
-
-
-        const customer = {
-
-            "Customer ID":
-                "C-" + Date.now(),
-
-            "Name":
-                name,
-
-            "Email":
-                email,
-
-            "Password":
-                password,
-
-            "Credits":
-                0
-
-        };
-
-
-        customersData.push(customer);
-
-
-        workbook.Sheets["Customer"] =
-            XLSX.utils.json_to_sheet(
-                customersData
-            );
-
-
-        writeWorkbook(workbook);
-
-        console.log(
-            "New customer saved to Excel:",
-            customer
-        );
-
-
-        res.status(201).json({
-
-            message:
-                "Account created successfully."
-
-        });
-
-    } catch (error) {
-
-        console.error(
-            "Customer signup error:",
-            error
-        );
-
-        res.status(500).json({
-
-            message:
-                "Unable to create customer account."
-
-        });
-
-    }
-
+    return res.status(410).json({
+        message: "Customer signup is currently disabled."
+    });
 });
 
 
@@ -522,122 +419,14 @@ app.post("/api/customers/signup", (req, res) => {
 ========================================================= */
 
 app.post("/api/customers/login", (req, res) => {
-
-    try {
-
-        const {
-            email,
-            password
-        } = req.body;
-
-
-        if (!email || !password) {
-
-            return res.status(400).json({
-
-                message:
-                    "Please enter your email and password."
-
-            });
-
-        }
-
-
-        const workbook =
-            XLSX.readFile(excelFile);
-
-        const worksheet =
-            workbook.Sheets["Customer"];
-
-
-        if (!worksheet) {
-
-            return res.status(500).json({
-
-                message:
-                    "Customer sheet not found."
-
-            });
-
-        }
-
-
-        const customersData =
-            XLSX.utils.sheet_to_json(
-                worksheet
-            );
-
-
-        const customer =
-            customersData.find(
-                customer =>
-                    String(
-                        customer.Email || ""
-                    ).trim().toLowerCase() ===
-                    String(email)
-                        .trim()
-                        .toLowerCase() &&
-                    String(
-                        customer.Password || ""
-                    ) ===
-                    String(password)
-            );
-
-
-        if (!customer) {
-
-            return res.status(401).json({
-
-                message:
-                    "Invalid email or password."
-
-            });
-
-        }
-
-
-        res.json({
-
-            message:
-                "Login successful.",
-
-            customer: {
-
-                customerId:
-                    customer["Customer ID"],
-
-                name:
-                    customer.Name,
-
-                email:
-                    customer.Email,
-
-                credits:
-                    Number(
-                        customer["Credits"] || 0
-                    )
-
-            }
-
-        });
-
-    } catch (error) {
-
-        console.error(
-            "Customer login error:",
-            error
-        );
-
-        res.status(500).json({
-
-            message:
-                "Unable to process customer login."
-
-        });
-
-    }
-
+    return res.status(410).json({
+        message: "Customer login is currently disabled."
+    });
 });
+
+/* =========================================================
+   END DISABLED CUSTOMER-FACING AREA
+========================================================= */
 
 
 /* =========================================================
@@ -809,6 +598,11 @@ app.post("/api/staff/login", (req, res) => {
 app.post("/api/tickets", (req, res) => {
 
     try {
+
+        const validationMessage = validateTicketCreation(req.body);
+        if (validationMessage) {
+            return res.status(400).json({ message: validationMessage });
+        }
 
         const workbook =
             XLSX.readFile(excelFile);
@@ -1254,12 +1048,17 @@ app.post("/api/tickets", (req, res) => {
 
 });
 
-
 /* =========================================================
    GET ALL TICKETS
 ========================================================= */
 
 app.get("/api/tickets", (req, res) => {
+
+    if (req.query.customerId) {
+        return res.status(410).json({
+            message: "Customer ticket access is currently disabled."
+        });
+    }
 
     try {
 
@@ -1429,6 +1228,11 @@ app.put(
     (req, res) => {
 
         try {
+
+            const validationMessage = validateTicketUpdate(req.body);
+            if (validationMessage) {
+                return res.status(400).json({ message: validationMessage });
+            }
 
             const ticketId =
                 req.params.ticketId;
@@ -1626,6 +1430,10 @@ app.put(
                         message: error.message
                     });
                 }
+
+                return res.status(500).json({
+                    message: "Unable to update ticket."
+                });
 
         }
 
@@ -2189,6 +1997,11 @@ app.post(
 
         try {
 
+            const validationMessage = validateServiceReport(req.body);
+            if (validationMessage) {
+                return res.status(400).json({ message: validationMessage });
+            }
+
             const ticketId = req.params.ticketId;
             const {
                 onsite,
@@ -2272,6 +2085,12 @@ app.put(
     "/api/tickets/:ticketId/service-report",
     (req, res) => {
         try {
+
+            const validationMessage = validateServiceReport(req.body);
+            if (validationMessage) {
+                return res.status(400).json({ message: validationMessage });
+            }
+
             const ticketId = req.params.ticketId;
             const {
                 onsite,
@@ -2468,34 +2287,57 @@ app.get(
 );
 
 
+app.use((error, req, res, next) => {
+    if (error && error.type === "entity.too.large") {
+        return res.status(413).json({
+            message: "Request body exceeds the 32 KB limit."
+        });
+    }
+
+    if (error && error.type === "entity.parse.failed") {
+        return res.status(400).json({
+            message: "Request body must contain valid JSON."
+        });
+    }
+
+    return res.status(500).json({
+        message: "Unable to process request."
+    });
+});
+
+
 /* =========================================================
    START SERVER
 ========================================================= */
 
-try {
-    const startupWorkbook = XLSX.readFile(excelFile);
-    const startupRepair = repairMissingCustomerLinks(startupWorkbook);
+if (require.main === module) {
+    try {
+        const startupWorkbook = XLSX.readFile(excelFile);
+        const startupRepair = repairMissingCustomerLinks(startupWorkbook);
 
-    if (startupRepair.changed) {
-        console.log(
-            `Startup repair fixed ${startupRepair.fixedCount} orphaned or missing customer ticket link(s).`
+        if (startupRepair.changed) {
+            console.log(
+                `Startup repair fixed ${startupRepair.fixedCount} orphaned or missing customer ticket link(s).`
+            );
+        }
+    } catch (error) {
+        console.error(
+            "Startup customer repair error:",
+            error
         );
     }
-} catch (error) {
-    console.error(
-        "Startup customer repair error:",
-        error
+
+    app.listen(
+        PORT,
+        "0.0.0.0",
+        () => {
+
+            console.log(
+                `IT Ticketing System running on http://localhost:${PORT}`
+            );
+
+        }
     );
 }
 
-app.listen(
-    PORT,
-    "0.0.0.0",
-    () => {
-
-        console.log(
-            `IT Ticketing System running on http://localhost:${PORT}`
-        );
-
-    }
-);
+module.exports = app;
