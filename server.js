@@ -1,10 +1,29 @@
 const express = require("express");
+const { rateLimit } = require("express-rate-limit");
 const fs = require("fs");
 const path = require("path");
 const XLSX = require("xlsx");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const configuredLoginRateLimit = Number.parseInt(process.env.IT_TICKET_LOGIN_RATE_LIMIT_MAX, 10);
+const configuredLoginRateLimitWindowMs = Number.parseInt(
+    process.env.IT_TICKET_LOGIN_RATE_LIMIT_WINDOW_MS,
+    10
+);
+const loginRateLimiter = rateLimit({
+    windowMs: Number.isInteger(configuredLoginRateLimitWindowMs) && configuredLoginRateLimitWindowMs > 0
+        ? configuredLoginRateLimitWindowMs
+        : 15 * 60 * 1000,
+    limit: Number.isInteger(configuredLoginRateLimit) && configuredLoginRateLimit > 0
+        ? configuredLoginRateLimit
+        : 5,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    handler: (_req, res) => res.status(429).json({
+        message: "Too many login attempts. Please try again later."
+    })
+});
 
 const excelDir = process.env.IT_TICKET_DATABASE_DIR || path.join(
     __dirname,
@@ -161,6 +180,221 @@ function validateAppointmentDateTime(appointmentDate, appointmentTime, now = new
 
 function normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
+}
+
+function validateOptionalText(value, fieldName, maxLength) {
+    if (value === undefined || value === null) {
+        return null;
+    }
+
+    if (typeof value !== "string") {
+        return `${fieldName} must be text.`;
+    }
+
+    if (value.length > maxLength) {
+        return `${fieldName} must be ${maxLength} characters or fewer.`;
+    }
+
+    return null;
+}
+
+function validateTicketCreation(body) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return "Request body must be a JSON object.";
+    }
+
+    const supportTypes = [
+        "Phone Support",
+        "Email Support",
+        "Remote Support",
+        "On-site Support"
+    ];
+    const textFields = [
+        ["customerName", "Customer name", 120],
+        ["email", "Email", 254],
+        ["customerId", "Customer ID", 64],
+        ["issue", "Issue", 5000],
+        ["supportType", "Support type", 40],
+        ["onSiteSupportType", "On-site support type", 20],
+        ["appointmentDate", "Appointment date", 10],
+        ["appointmentTime", "Appointment time", 5]
+    ];
+
+    for (const [field, label, maxLength] of textFields) {
+        const validationMessage = validateOptionalText(body[field], label, maxLength);
+        if (validationMessage) {
+            return validationMessage;
+        }
+    }
+
+    if (!body.issue || !body.issue.trim() || !body.supportType || !body.supportType.trim()) {
+        return "Please provide an issue and support type.";
+    }
+
+    if (!body.customerId && !body.email) {
+        return "Please provide a customer ID or email.";
+    }
+
+    if (body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim())) {
+        return "Please provide a valid email address.";
+    }
+
+    if (!supportTypes.includes(body.supportType.trim())) {
+        return "Please select a valid support type.";
+    }
+
+    if (
+        body.appointmentDuration !== undefined &&
+        body.appointmentDuration !== null &&
+        typeof body.appointmentDuration !== "string" &&
+        typeof body.appointmentDuration !== "number"
+    ) {
+        return "Appointment duration must be a number.";
+    }
+
+    if (
+        body.appointmentDuration !== undefined &&
+        body.appointmentDuration !== null &&
+        String(body.appointmentDuration).trim() !== "" &&
+        !Number.isFinite(Number(body.appointmentDuration))
+    ) {
+        return "Appointment duration must be a valid number.";
+    }
+
+    return null;
+}
+
+function validateTicketUpdate(body) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return "Request body must be a JSON object.";
+    }
+
+    const textFields = [
+        ["assignedEngineer", "Assigned engineer", 120],
+        ["serviceResult", "Service result", 5000],
+        ["customerName", "Customer name", 120],
+        ["email", "Email", 254],
+        ["customerId", "Customer ID", 64]
+    ];
+
+    for (const [field, label, maxLength] of textFields) {
+        const validationMessage = validateOptionalText(body[field], label, maxLength);
+        if (validationMessage) {
+            return validationMessage;
+        }
+    }
+
+    if (body.status !== undefined && !["Open", "In Progress", "Pending", "Closed"].includes(body.status)) {
+        return "Please select a valid ticket status.";
+    }
+
+    if (
+        body.appointmentStatus !== undefined &&
+        body.appointmentStatus !== "" &&
+        !["Pending", "Confirmed", "Reschedule Required"].includes(body.appointmentStatus)
+    ) {
+        return "Please select a valid appointment status.";
+    }
+
+    return null;
+}
+
+function validateServiceReport(body) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return "Request body must be a JSON object.";
+    }
+
+    const textFields = [
+        ["engineer", "Engineer", 120],
+        ["tasksDone", "Tasks done", 5000],
+        ["resolution", "Resolution", 5000],
+        ["serviceMode", "Service mode", 30],
+        ["date", "Service date", 10],
+        ["signInTime", "Sign-in time", 5],
+        ["signOutTime", "Sign-out time", 5]
+    ];
+
+    for (const [field, label, maxLength] of textFields) {
+        const validationMessage = validateOptionalText(body[field], label, maxLength);
+        if (validationMessage) {
+            return validationMessage;
+        }
+    }
+
+    if (
+        body.serviceMode !== undefined &&
+        body.serviceMode !== "" &&
+        ![
+            "on-site",
+            "onsite",
+            "on site",
+            "yes",
+            "visit",
+            "on-site visit",
+            "remote",
+            "remote support",
+            "off-site",
+            "offsite",
+            "no",
+            "hybrid",
+            "hybrid support"
+        ].includes(body.serviceMode.trim().toLowerCase())
+    ) {
+        return "Please select a valid service mode.";
+    }
+
+    if (body.date !== undefined && body.date !== "") {
+        const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(body.date);
+        if (!dateMatch) {
+            return "Please provide a valid service date.";
+        }
+
+        const date = new Date(Date.UTC(
+            Number(dateMatch[1]),
+            Number(dateMatch[2]) - 1,
+            Number(dateMatch[3])
+        ));
+        if (
+            date.getUTCFullYear() !== Number(dateMatch[1]) ||
+            date.getUTCMonth() !== Number(dateMatch[2]) - 1 ||
+            date.getUTCDate() !== Number(dateMatch[3])
+        ) {
+            return "Please provide a valid service date.";
+        }
+    }
+
+    for (const [field, label] of [["signInTime", "Sign-in time"], ["signOutTime", "Sign-out time"]]) {
+        if (body[field] !== undefined && body[field] !== "" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(body[field])) {
+            return `${label} must use HH:MM format.`;
+        }
+    }
+
+    if (body.onsite !== undefined && typeof body.onsite !== "boolean") {
+        const legacyOnsiteValues = [
+            "on-site",
+            "onsite",
+            "on site",
+            "yes",
+            "visit",
+            "on-site visit",
+            "remote",
+            "remote support",
+            "off-site",
+            "offsite",
+            "no",
+            "hybrid",
+            "hybrid support"
+        ];
+
+        if (
+            typeof body.onsite !== "string" ||
+            !legacyOnsiteValues.includes(body.onsite.trim().toLowerCase())
+        ) {
+            return "On-site indicator must be a boolean or a supported legacy service-mode value.";
+        }
+    }
+
+    return null;
 }
 
 function addCustomerToIndexes(customerIndexes, customer, customerIndex) {
@@ -430,10 +664,13 @@ app.post("/api/customers/login", (req, res) => {
 
 
 /* =========================================================
-   STAFF LOGIN
+    STAFF LOGIN
 ========================================================= */
 
-app.post("/api/staff/login", (req, res) => {
+/* TEMPORARY STAFF LOGIN LOGGING LANDMARK
+    Remove temporary verbose logging below before production. Never log passwords.
+*/
+app.post("/api/staff/login", loginRateLimiter, (req, res) => {
 
     try {
 
