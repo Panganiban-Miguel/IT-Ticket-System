@@ -672,44 +672,22 @@ async function loadStaffDashboard() {
             document.getElementById("emptyState");
 
 
+        const ticketCounts = countTicketStatuses(tickets);
+
         if (totalTickets) {
-
-            totalTickets.textContent =
-                tickets.length;
-
+            totalTickets.textContent = ticketCounts.total;
         }
-
 
         if (openTickets) {
-
-            openTickets.textContent =
-                tickets.filter(
-                    ticket =>
-                        ticket.Status === "Open"
-                ).length;
-
+            openTickets.textContent = ticketCounts.open;
         }
-
 
         if (inProgressTickets) {
-
-            inProgressTickets.textContent =
-                tickets.filter(
-                    ticket =>
-                        ticket.Status === "In Progress"
-                ).length;
-
+            inProgressTickets.textContent = ticketCounts.inProgress;
         }
 
-
         if (closedTickets) {
-
-            closedTickets.textContent =
-                tickets.filter(
-                    ticket =>
-                        ticket.Status === "Closed"
-                ).length;
-
+            closedTickets.textContent = ticketCounts.closed;
         }
 
 

@@ -163,16 +163,49 @@ function normalizeEmail(value) {
     return String(value || "").trim().toLowerCase();
 }
 
-function getNextCustomerId(customersData) {
+function addCustomerToIndexes(customerIndexes, customer, customerIndex) {
+    const customerId = String(customer["Customer ID"] || "");
+    const trimmedCustomerId = customerId.trim();
+    const normalizedEmail = normalizeEmail(customer.Email || "");
+
+    if (!customerIndexes.byId.has(customerId)) {
+        customerIndexes.byId.set(customerId, customerIndex);
+    }
+
+    if (trimmedCustomerId) {
+        if (!customerIndexes.byTrimmedId.has(trimmedCustomerId)) {
+            customerIndexes.byTrimmedId.set(trimmedCustomerId, customerIndex);
+        }
+        customerIndexes.usedIds.add(trimmedCustomerId);
+    }
+
+    if (normalizedEmail && !customerIndexes.byEmail.has(normalizedEmail)) {
+        customerIndexes.byEmail.set(normalizedEmail, customerIndex);
+    }
+}
+
+function createCustomerIndexes(customersData) {
+    const customerIndexes = {
+        byId: new Map(),
+        byTrimmedId: new Map(),
+        byEmail: new Map(),
+        usedIds: new Set()
+    };
+
+    customersData.forEach((customer, customerIndex) => {
+        addCustomerToIndexes(customerIndexes, customer, customerIndex);
+    });
+
+    return customerIndexes;
+}
+
+function getNextCustomerId(customerIndexes) {
     let candidate = 1;
 
     while (true) {
         const candidateId = `C-${String(candidate).padStart(13, "0")}`;
-        const isTaken = customersData.some(
-            customer => String(customer["Customer ID"] || "").trim() === candidateId
-        );
 
-        if (!isTaken) {
+        if (!customerIndexes.usedIds.has(candidateId)) {
             return candidateId;
         }
 
@@ -180,15 +213,19 @@ function getNextCustomerId(customersData) {
     }
 }
 
-function resolveCustomerForTicket(customersData, submittedCustomerId, submittedEmail, submittedName) {
+function resolveCustomerForTicket(
+    customersData,
+    submittedCustomerId,
+    submittedEmail,
+    submittedName,
+    customerIndexes = createCustomerIndexes(customersData)
+) {
     const normalizedEmail = normalizeEmail(submittedEmail);
 
     if (submittedCustomerId) {
-        const customerIndex = customersData.findIndex(
-            customer => String(customer["Customer ID"] || "") === String(submittedCustomerId)
-        );
+        const customerIndex = customerIndexes.byId.get(String(submittedCustomerId));
 
-        if (customerIndex === -1) {
+        if (customerIndex === undefined) {
             return { customer: null, customerIndex: -1, created: false, reason: "Customer not found." };
         }
 
@@ -205,11 +242,9 @@ function resolveCustomerForTicket(customersData, submittedCustomerId, submittedE
         return { customer: null, customerIndex: -1, created: false, reason: null };
     }
 
-    const customerIndex = customersData.findIndex(
-        customer => normalizeEmail(customer.Email || "") === normalizedEmail
-    );
+    const customerIndex = customerIndexes.byEmail.get(normalizedEmail);
 
-    if (customerIndex !== -1) {
+    if (customerIndex !== undefined) {
         const customer = customersData[customerIndex];
 
         if (!String(customer.Name || "").trim() && submittedName) {
@@ -220,16 +255,18 @@ function resolveCustomerForTicket(customersData, submittedCustomerId, submittedE
     }
 
     const newCustomer = {
-        "Customer ID": getNextCustomerId(customersData),
+        "Customer ID": getNextCustomerId(customerIndexes),
         "Name": submittedName || "",
         "Email": submittedEmail || "",
         "Password": "",
         "Credits": 0
     };
 
+    const newCustomerIndex = customersData.length;
     customersData.push(newCustomer);
+    addCustomerToIndexes(customerIndexes, newCustomer, newCustomerIndex);
 
-    return { customer: newCustomer, customerIndex: customersData.length - 1, created: true, reason: null };
+    return { customer: newCustomer, customerIndex: newCustomerIndex, created: true, reason: null };
 }
 
 function repairMissingCustomerLinks(workbook) {
@@ -242,6 +279,7 @@ function repairMissingCustomerLinks(workbook) {
 
     const customersData = XLSX.utils.sheet_to_json(customerWorksheet);
     const ticketsData = XLSX.utils.sheet_to_json(ticketWorksheet);
+    const customerIndexes = createCustomerIndexes(customersData);
 
     let changed = false;
     let fixedCount = 0;
@@ -258,15 +296,17 @@ function repairMissingCustomerLinks(workbook) {
         let matchedCustomer = null;
 
         if (ticketCustomerId) {
-            matchedCustomer = customersData.find(
-                customer => String(customer["Customer ID"] || "").trim() === ticketCustomerId
-            );
+            const customerIndex = customerIndexes.byTrimmedId.get(ticketCustomerId);
+            if (customerIndex !== undefined) {
+                matchedCustomer = customersData[customerIndex];
+            }
         }
 
         if (!matchedCustomer && ticketEmail) {
-            matchedCustomer = customersData.find(
-                customer => normalizeEmail(customer.Email || "") === normalizeEmail(ticketEmail)
-            );
+            const customerIndex = customerIndexes.byEmail.get(normalizeEmail(ticketEmail));
+            if (customerIndex !== undefined) {
+                matchedCustomer = customersData[customerIndex];
+            }
         }
 
         if (!matchedCustomer && ticketEmail) {
@@ -274,7 +314,8 @@ function repairMissingCustomerLinks(workbook) {
                 customersData,
                 "",
                 ticketEmail,
-                ticketName
+                ticketName,
+                customerIndexes
             );
 
             matchedCustomer = createdCustomer.customer;
@@ -797,6 +838,7 @@ app.post("/api/tickets", (req, res) => {
             XLSX.utils.sheet_to_json(
                 customerWorksheet
             );
+        const customerIndexes = createCustomerIndexes(customersData);
 
 
         const submittedCustomerId =
@@ -820,7 +862,8 @@ app.post("/api/tickets", (req, res) => {
                 customersData,
                 submittedCustomerId,
                 submittedEmail,
-                submittedName
+                submittedName,
+                customerIndexes
             );
 
 
@@ -842,24 +885,6 @@ app.post("/api/tickets", (req, res) => {
             return res.status(400).json({
                 message: "Customer is required."
             });
-        }
-
-
-        if (customerResolution.created) {
-            console.log(
-                "Auto-created customer for ticket:",
-                customer,
-                "customerCount:",
-                customersData.length
-            );
-
-            workbook.Sheets["Customer"] =
-                XLSX.utils.json_to_sheet(customersData);
-            writeWorkbook(workbook);
-            console.log(
-                "Customer sheet saved after auto-create. Total customers:",
-                customersData.length
-            );
         }
 
 
@@ -1496,6 +1521,7 @@ app.put(
                 XLSX.utils.sheet_to_json(
                     customerWorksheet
                 );
+            const customerIndexes = createCustomerIndexes(customersData);
 
             let resolvedCustomer = null;
             let customerResolution = null;
@@ -1506,7 +1532,8 @@ app.put(
                         customersData,
                         customerRecordToUse,
                         customerEmailToUse,
-                        customerNameToUse
+                        customerNameToUse,
+                        customerIndexes
                     );
 
                 resolvedCustomer = customerResolution.customer;
