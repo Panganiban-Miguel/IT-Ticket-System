@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Details - IT Support</title>
+    <link rel="stylesheet" href="/style.css">
+    <style>
+        .customer-heading {
+            margin-bottom: 24px;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: #173b88;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .customer-heading h1 {
+            margin-bottom: 6px;
+            font-size: 30px;
+        }
+
+        .customer-heading p {
+            color: #6b7280;
+        }
+
+        .customer-info,
+        .ticket-section {
+            margin-bottom: 24px;
+            padding: 22px;
+            border-radius: 12px;
+            background: #fff;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+        }
+
+        .customer-info-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 18px;
+        }
+
+        .customer-info-item span {
+            display: block;
+            margin-bottom: 6px;
+            color: #6b7280;
+            font-size: 13px;
+        }
+
+        .customer-info-item strong {
+            overflow-wrap: anywhere;
+        }
+
+        .ticket-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 14px;
+            margin-bottom: 12px;
+        }
+
+        .ticket-summary-card {
+            display: block;
+            padding: 18px;
+            border-radius: 10px;
+            background: #fff;
+            color: #1f2937;
+            text-decoration: none;
+            box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
+        }
+
+        .ticket-summary-card:hover,
+        .ticket-summary-card:focus-visible {
+            outline: 2px solid #25448f;
+            outline-offset: 2px;
+        }
+
+        .ticket-summary-card span,
+        .ticket-summary-card strong {
+            display: block;
+        }
+
+        .ticket-summary-card span {
+            color: #6b7280;
+            font-size: 13px;
+        }
+
+        .ticket-summary-card strong {
+            margin-top: 6px;
+            font-size: 26px;
+        }
+
+        .overlap-note {
+            margin: 0 2px 22px;
+            color: #6b7280;
+            font-size: 13px;
+        }
+
+        .ticket-section h2 {
+            margin-bottom: 14px;
+            font-size: 20px;
+        }
+
+        .ticket-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .customer-ticket {
+            display: grid;
+            grid-template-columns: minmax(100px, 0.7fr) minmax(180px, 2fr) minmax(120px, 1fr) auto;
+            align-items: center;
+            gap: 14px;
+            padding: 14px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+        }
+
+        .ticket-id {
+            color: #173b88;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .ticket-id:hover {
+            text-decoration: underline;
+        }
+
+        .ticket-secondary {
+            color: #6b7280;
+            font-size: 13px;
+        }
+
+        .ticket-empty,
+        .customer-detail-status {
+            color: #6b7280;
+        }
+
+        .customer-detail-status[role="alert"] {
+            color: #b42318;
+        }
+
+        @media (max-width: 800px) {
+            .customer-info-grid,
+            .ticket-summary-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 600px) {
+            .customer-info,
+            .ticket-section {
+                padding: 16px;
+            }
+
+            .customer-ticket {
+                grid-template-columns: 1fr auto;
+                gap: 8px;
+            }
+
+            .customer-ticket .ticket-secondary {
+                grid-column: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="staff-layout">
+        <aside class="staff-sidebar">
+            <div class="staff-sidebar-header">
+                <button class="staff-menu-toggle" id="staffMenuToggle" type="button" aria-expanded="false" aria-controls="staffNav" aria-label="Open staff menu">
+                    <span class="staff-menu-icon" aria-hidden="true"></span>
+                </button>
+                <div class="staff-brand">IT Support</div>
+                <a href="/staff-profile.html" class="staff-profile-button staff-mobile-profile" aria-label="Staff Profile" title="Staff Profile">
+                    <span class="staff-profile-icon" aria-hidden="true">👤</span>
+                </a>
+            </div>
+            <nav class="staff-nav" id="staffNav" aria-label="Staff navigation">
+                <a href="/staff.html" class="staff-nav-link">Dashboard</a>
+                <a href="/customer-database.html" class="staff-nav-link" aria-current="location">Customer Database</a>
+                <a href="/staff-profile.html" class="staff-profile-button staff-nav-profile" aria-label="Staff Profile" title="Staff Profile">
+                    <span class="staff-profile-icon" aria-hidden="true">👤</span>
+                </a>
+                <a href="/" class="staff-nav-link staff-logout">Logout</a>
+            </nav>
+        </aside>
+
+        <main class="container staff-main">
+            <header class="customer-heading">
+                <a class="back-link" href="/customer-database.html">← Customer Database</a>
+                <h1 id="customerName">Customer Details</h1>
+                <p id="customerDetailStatus" class="customer-detail-status" role="status" aria-live="polite">Loading customer...</p>
+            </header>
+
+            <section class="customer-info" aria-label="Customer information">
+                <div class="customer-info-grid">
+                    <div class="customer-info-item"><span>Customer ID</span><strong id="customerId">—</strong></div>
+                    <div class="customer-info-item"><span>Email</span><strong id="customerEmail">—</strong></div>
+                    <div class="customer-info-item"><span>Available Credits</span><strong id="customerCredits">—</strong></div>
+                    <div class="customer-info-item"><span>Total Tickets</span><strong id="totalTickets">0</strong></div>
+                </div>
+            </section>
+
+            <section aria-label="Ticket categories">
+                <div class="ticket-summary-grid">
+                    <a class="ticket-summary-card" href="#openTicketsSection"><span>Open</span><strong id="openTicketCount">0</strong></a>
+                    <a class="ticket-summary-card" href="#inProgressTicketsSection"><span>In progress / ongoing</span><strong id="inProgressTicketCount">0</strong></a>
+                    <a class="ticket-summary-card" href="#pendingPaymentTicketsSection"><span>Pending payment</span><strong id="pendingPaymentTicketCount">0</strong></a>
+                    <a class="ticket-summary-card" href="#closedTicketsSection"><span>Closed</span><strong id="closedTicketCount">0</strong></a>
+                </div>
+                <p class="overlap-note">“Pending payment” identifies tickets with unpaid credits and may overlap with another workflow status.</p>
+            </section>
+
+            <section class="ticket-section" id="openTicketsSection">
+                <h2>Open Tickets</h2>
+                <div class="ticket-list" id="openTicketList"></div>
+            </section>
+            <section class="ticket-section" id="inProgressTicketsSection">
+                <h2>In Progress / Ongoing</h2>
+                <div class="ticket-list" id="inProgressTicketList"></div>
+            </section>
+            <section class="ticket-section" id="pendingPaymentTicketsSection">
+                <h2>Pending Payment</h2>
+                <div class="ticket-list" id="pendingPaymentTicketList"></div>
+            </section>
+            <section class="ticket-section" id="closedTicketsSection">
+                <h2>Closed Tickets</h2>
+                <div class="ticket-list" id="closedTicketList"></div>
+            </section>
+        </main>
+    </div>
+    <script src="/script.js"></script>
+    <script src="/customer-database.js"></script>
+</body>
+</html>

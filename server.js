@@ -530,6 +530,64 @@ function findTicketCustomer(customersData, ticket) {
     return customerIndex;
 }
 
+function getCustomerDirectoryEntry(customer, customerTickets) {
+    const ticketSummary = ticket => ({
+        ticketId: String(ticket["Ticket ID"] || ""),
+        issue: String(ticket.Issue || ""),
+        supportType: String(ticket["Support Type"] || ""),
+        status: String(ticket.Status || ""),
+        assignedEngineer: String(ticket["Assigned Engineer"] || ""),
+        createdDate: String(ticket["Created Date"] || ""),
+        unpaidCredits: Number(ticket["Unpaid Credits"] || 0)
+    });
+    const openTickets = customerTickets.filter(ticket => ticket.Status === "Open");
+    const inProgressTickets = customerTickets.filter(
+        ticket => ticket.Status === "In Progress" || ticket.Status === "Pending"
+    );
+    const closedTickets = customerTickets.filter(ticket => ticket.Status === "Closed");
+    const pendingPaymentTickets = customerTickets.filter(ticket => {
+        const unpaidCredits = Number(ticket["Unpaid Credits"] || 0);
+        return Number.isFinite(unpaidCredits) && unpaidCredits > 0;
+    });
+
+    return {
+        customer: {
+            id: String(customer["Customer ID"] || ""),
+            name: String(customer.Name || ""),
+            email: String(customer.Email || ""),
+            credits: customer.Credits ?? 0
+        },
+        ticketCounts: {
+            total: customerTickets.length,
+            open: openTickets.length,
+            inProgress: inProgressTickets.length,
+            pendingPayment: pendingPaymentTickets.length,
+            closed: closedTickets.length
+        },
+        tickets: {
+            open: openTickets.map(ticketSummary),
+            inProgress: inProgressTickets.map(ticketSummary),
+            pendingPayment: pendingPaymentTickets.map(ticketSummary),
+            closed: closedTickets.map(ticketSummary)
+        }
+    };
+}
+
+function getCustomerDirectoryEntries(customersData, ticketsData) {
+    const ticketsByCustomer = customersData.map(() => []);
+
+    ticketsData.forEach(ticket => {
+        const customerIndex = findTicketCustomer(customersData, ticket);
+        if (customerIndex !== -1) {
+            ticketsByCustomer[customerIndex].push(ticket);
+        }
+    });
+
+    return customersData.map((customer, index) =>
+        getCustomerDirectoryEntry(customer, ticketsByCustomer[index])
+    );
+}
+
 function settleTicketCredits(workbook, ticket, billableCredits) {
     const estimatedCredits = getTicketEstimatedCredits(ticket);
     const storedChargedCredits = ticket["Credits Charged"];
@@ -1082,6 +1140,70 @@ app.get("/api/staff/profile", requireStaffSession, (req, res) => {
     } catch (error) {
         console.error("Get staff profile error:", error);
         return res.status(500).json({ message: "Unable to load staff profile." });
+    }
+});
+
+app.get("/api/staff/customers", requireStaffSession, (req, res) => {
+    try {
+        const workbook = XLSX.readFile(excelFile);
+        const customerWorksheet = workbook.Sheets.Customer;
+        const ticketWorksheet = workbook.Sheets.Ticket;
+
+        if (!customerWorksheet) {
+            return res.status(404).json({ message: "Customer sheet not found." });
+        }
+        if (!ticketWorksheet) {
+            return res.status(404).json({ message: "Ticket sheet not found." });
+        }
+
+        const customersData = XLSX.utils.sheet_to_json(customerWorksheet);
+        const ticketsData = XLSX.utils.sheet_to_json(ticketWorksheet);
+        const entries = getCustomerDirectoryEntries(customersData, ticketsData);
+        const customerList = entries.map(entry => {
+            return {
+                ...entry.customer,
+                totalTickets: entry.ticketCounts.total
+            };
+        });
+
+        return res.json(customerList);
+    } catch (error) {
+        console.error("Get customer directory error:", error);
+        return res.status(500).json({
+            message: "Unable to load the customer directory."
+        });
+    }
+});
+
+app.get("/api/staff/customers/:customerId", requireStaffSession, (req, res) => {
+    try {
+        const workbook = XLSX.readFile(excelFile);
+        const customerWorksheet = workbook.Sheets.Customer;
+        const ticketWorksheet = workbook.Sheets.Ticket;
+
+        if (!customerWorksheet) {
+            return res.status(404).json({ message: "Customer sheet not found." });
+        }
+        if (!ticketWorksheet) {
+            return res.status(404).json({ message: "Ticket sheet not found." });
+        }
+
+        const customersData = XLSX.utils.sheet_to_json(customerWorksheet);
+        const ticketsData = XLSX.utils.sheet_to_json(ticketWorksheet);
+        const entry = getCustomerDirectoryEntries(customersData, ticketsData).find(
+            row => row.customer.id === req.params.customerId
+        );
+
+        if (!entry) {
+            return res.status(404).json({ message: "Customer not found." });
+        }
+
+        return res.json(entry);
+    } catch (error) {
+        console.error("Get customer details error:", error);
+        return res.status(500).json({
+            message: "Unable to load customer details."
+        });
     }
 });
 

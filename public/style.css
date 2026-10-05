@@ -260,7 +260,7 @@ body {
     }
 
     .staff-nav.is-open {
-        max-height: 150px;
+        max-height: 240px;
         visibility: visible;
         padding: 0 20px 12px;
         opacity: 1;
