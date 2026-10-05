@@ -770,23 +770,6 @@ async function loadStaffDashboard() {
             mobileTicketList.innerHTML = "";
         }
 
-
-        if (tickets.length === 0) {
-
-            if (emptyState) {
-                emptyState.style.display = "block";
-            }
-
-            return;
-
-        }
-
-
-        if (emptyState) {
-            emptyState.style.display = "none";
-        }
-
-
         let openedSwipe = null;
 
         function closeOpenedSwipe() {
@@ -808,6 +791,70 @@ async function loadStaffDashboard() {
             deleteButton.disabled = false;
             openedSwipe = { entry, deleteButton };
         }
+
+        const ticketEntries = [];
+        const ticketFilterButtons = document.querySelectorAll("[data-ticket-filter]");
+        const ticketListHeading = document.getElementById("ticketListHeading");
+        const emptyStateTitle = document.getElementById("emptyStateTitle");
+        const emptyStateMessage = document.getElementById("emptyStateMessage");
+        const filterHeadings = {
+            all: "All Tickets",
+            open: "Open Tickets",
+            inProgressPending: "In Progress + Pending Tickets",
+            closed: "Closed Tickets"
+        };
+        let activeTicketFilter = "all";
+
+        function applyTicketFilter(filter = activeTicketFilter) {
+            activeTicketFilter = filter;
+            closeOpenedSwipe();
+
+            const visibleTickets = new Set(
+                filterTicketsByStatus(tickets, activeTicketFilter)
+            );
+
+            for (const entry of ticketEntries) {
+                const isVisible = visibleTickets.has(entry.ticket);
+                entry.row.hidden = !isVisible;
+
+                if (entry.mobileEntry) {
+                    entry.mobileEntry.hidden = !isVisible;
+                }
+            }
+
+            ticketFilterButtons.forEach(button => {
+                const isActive = button.dataset.ticketFilter === activeTicketFilter;
+                button.classList.toggle("is-active", isActive);
+                button.setAttribute("aria-pressed", String(isActive));
+            });
+
+            if (ticketListHeading) {
+                ticketListHeading.textContent = filterHeadings[activeTicketFilter];
+            }
+
+            if (emptyState) {
+                const hasVisibleTickets = visibleTickets.size > 0;
+                emptyState.style.display = hasVisibleTickets ? "none" : "block";
+
+                if (emptyStateTitle) {
+                    emptyStateTitle.textContent = tickets.length === 0
+                        ? "No tickets found"
+                        : "No tickets match this filter";
+                }
+
+                if (emptyStateMessage) {
+                    emptyStateMessage.textContent = tickets.length === 0
+                        ? "Submitted support tickets will appear here."
+                        : "Choose another status or select Total Tickets to see all tickets.";
+                }
+            }
+        }
+
+        ticketFilterButtons.forEach(button => {
+            button.addEventListener("click", () => {
+                applyTicketFilter(button.dataset.ticketFilter);
+            });
+        });
 
 
         tickets.forEach(ticket => {
@@ -892,6 +939,9 @@ async function loadStaffDashboard() {
 
             ticketTableBody.appendChild(row);
 
+            const ticketEntry = { ticket, row, mobileEntry: null };
+            ticketEntries.push(ticketEntry);
+
             if (mobileTicketList) {
                 const swipeEntry = document.createElement("div");
                 swipeEntry.className = "mobile-ticket-swipe";
@@ -949,6 +999,7 @@ async function loadStaffDashboard() {
                 mobileInfo.append(mobileId, mobileIssue, mobileMeta);
                 mobileCard.append(mobileInfo, mobileStatus);
                 swipeEntry.append(mobileDeleteButton, mobileCard);
+                ticketEntry.mobileEntry = swipeEntry;
 
                 let pointerStart = null;
                 let pointerCurrentX = null;
@@ -1067,6 +1118,8 @@ async function loadStaffDashboard() {
                 }
             });
         }
+
+        applyTicketFilter();
 
 
     } catch (error) {

@@ -42,6 +42,26 @@
                 repeat(4, 1fr);
         }
 
+        .summary-card {
+            width: 100%;
+            border: 0;
+            color: inherit;
+            font: inherit;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .summary-card .summary-label,
+        .summary-card .summary-number {
+            display: block;
+        }
+
+        .summary-card.is-active,
+        .summary-card:focus-visible {
+            outline: 3px solid #25448F;
+            outline-offset: 3px;
+        }
+
         /* =========================
            TABLE
         ========================= */
@@ -376,71 +396,71 @@
          SUMMARY CARDS
     ========================= -->
 
-    <section class="summary-grid">
+    <section class="summary-grid" aria-label="Ticket status filters">
 
 
-        <div class="summary-card">
+        <button class="summary-card is-active" type="button" data-ticket-filter="all" aria-pressed="true">
 
-            <div class="summary-label">
+            <span class="summary-label">
                 Total Tickets
-            </div>
+            </span>
 
-            <div
+            <span
                 class="summary-number"
                 id="totalTickets"
             >
                 0
-            </div>
+            </span>
 
-        </div>
+        </button>
 
 
-        <div class="summary-card">
+        <button class="summary-card" type="button" data-ticket-filter="open" aria-pressed="false">
 
-            <div class="summary-label">
+            <span class="summary-label">
                 Open
-            </div>
+            </span>
 
-            <div
+            <span
                 class="summary-number"
                 id="openTickets"
             >
                 0
-            </div>
+            </span>
 
-        </div>
+        </button>
 
 
-        <div class="summary-card">
+        <button class="summary-card" type="button" data-ticket-filter="inProgressPending" aria-pressed="false">
 
-            <div class="summary-label">
-                In Progress
-            </div>
+            <span class="summary-label">
+                In Progress + Pending
+            </span>
 
-            <div
+            <span
                 class="summary-number"
                 id="inProgressTickets"
             >
                 0
-            </div>
+            </span>
 
-        </div>
+        </button>
 
 
-        <div class="summary-card">
+        <button class="summary-card" type="button" data-ticket-filter="closed" aria-pressed="false">
 
-            <div class="summary-label">
+            <span class="summary-label">
                 Closed
-            </div>
+            </span>
 
-            <div
+            <span
                 class="summary-number"
                 id="closedTickets"
             >
                 0
-            </div>
+            </span>
 
-        </div>
+        </button>
 
 
     </section>
@@ -456,7 +476,7 @@
 
         <div class="tickets-header">
 
-            <h2>
+            <h2 id="ticketListHeading">
                 All Tickets
             </h2>
 
@@ -521,11 +541,11 @@
             style="display:none;"
         >
 
-            <h3>
+            <h3 id="emptyStateTitle">
                 No tickets found
             </h3>
 
-            <p>
+            <p id="emptyStateMessage">
                 Submitted support tickets will appear here.
             </p>
 

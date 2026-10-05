@@ -35,7 +35,10 @@ const staffCredentials = {
 let server;
 let baseUrl;
 
-function writeWorkbook({ includeCustomerSheet = true } = {}) {
+function writeWorkbook({
+    includeCustomerSheet = true,
+    includeServiceReportSheet = true
+} = {}) {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(
         workbook,
@@ -57,23 +60,25 @@ function writeWorkbook({ includeCustomerSheet = true } = {}) {
         );
     }
 
-    XLSX.utils.book_append_sheet(
-        workbook,
-        XLSX.utils.json_to_sheet([{
-            "Report ID": "SR-100",
-            "Ticket ID": "T-100",
-            "Engineer": "Test Engineer",
-            "ServiceMode": "On-site",
-            "Onsite": "Yes",
-            "Date": "2026-10-02",
-            "SignInTime": "09:00",
-            "SignOutTime": "10:00",
-            "HoursSpent": 1,
-            "TasksDone": "Initial work",
-            "Resolution": "Initial resolution"
-        }]),
-        "ServiceReport"
-    );
+    if (includeServiceReportSheet) {
+        XLSX.utils.book_append_sheet(
+            workbook,
+            XLSX.utils.json_to_sheet([{
+                "Report ID": "SR-100",
+                "Ticket ID": "T-100",
+                "Engineer": "Test Engineer",
+                "ServiceMode": "On-site",
+                "Onsite": "Yes",
+                "Date": "2026-10-02",
+                "SignInTime": "09:00",
+                "SignOutTime": "10:00",
+                "HoursSpent": 1,
+                "TasksDone": "Initial work",
+                "Resolution": "Initial resolution"
+            }]),
+            "ServiceReport"
+        );
+    }
     XLSX.utils.book_append_sheet(
         workbook,
         XLSX.utils.json_to_sheet([{
@@ -295,6 +300,60 @@ test("POST service report rejects invalid service modes", async () => {
 
     assert.equal(response.status, 400);
     assert.equal(body.message, "Please select a valid service mode.");
+});
+
+test("POST service reports creates the missing sheet and keeps reports linked to each ticket", async () => {
+    writeWorkbook({ includeServiceReportSheet: false });
+
+    const ticketResponse = await fetch(`${baseUrl}/api/tickets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            customerId: "C-100",
+            issue: "A second ticket with its own service report",
+            supportType: "Remote Support"
+        })
+    });
+    const ticketBody = await ticketResponse.json();
+    assert.equal(ticketResponse.status, 201);
+
+    const reportsToCreate = [
+        {
+            ticketId: "T-100",
+            resolution: "First ticket resolution"
+        },
+        {
+            ticketId: ticketBody.ticketId,
+            resolution: "Second ticket resolution"
+        }
+    ];
+
+    for (const { ticketId, resolution } of reportsToCreate) {
+        const response = await fetch(`${baseUrl}/api/tickets/${ticketId}/service-report`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                serviceMode: "Remote",
+                date: "2026-10-05",
+                resolution
+            })
+        });
+
+        assert.equal(response.status, 201);
+    }
+
+    const savedWorkbook = XLSX.readFile(databasePath);
+    assert.ok(savedWorkbook.SheetNames.includes("ServiceReport"));
+
+    for (const { ticketId, resolution } of reportsToCreate) {
+        const response = await fetch(`${baseUrl}/api/tickets/${ticketId}/service-reports`);
+        const reports = await response.json();
+
+        assert.equal(response.status, 200);
+        assert.equal(reports.length, 1);
+        assert.equal(reports[0]["Ticket ID"], ticketId);
+        assert.equal(reports[0].Resolution, resolution);
+    }
 });
 
 test("POST service report preserves supported legacy service-mode aliases", async () => {

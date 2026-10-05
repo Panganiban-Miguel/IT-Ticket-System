@@ -2416,6 +2416,15 @@ function buildServiceReportFromTicket(ticket, overrides = {}) {
     };
 }
 
+function setWorkbookSheet(workbook, sheetName, worksheet) {
+    if (workbook.SheetNames.includes(sheetName)) {
+        workbook.Sheets[sheetName] = worksheet;
+        return;
+    }
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+}
+
 app.get(
     "/api/tickets/:ticketId/service-report",
     (req, res) => {
@@ -2518,7 +2527,11 @@ app.post(
                 ticketsData[ticketIndex]["Assigned Engineer"] = engineer;
             }
 
-            workbook.Sheets["ServiceReport"] = XLSX.utils.json_to_sheet(reportsData);
+            setWorkbookSheet(
+                workbook,
+                "ServiceReport",
+                XLSX.utils.json_to_sheet(reportsData)
+            );
             workbook.Sheets["Ticket"] = XLSX.utils.json_to_sheet(ticketsData);
 
             writeWorkbook(workbook);
@@ -2611,7 +2624,11 @@ app.put(
                 }
             }
 
-            workbook.Sheets["ServiceReport"] = XLSX.utils.json_to_sheet(reportsData);
+            setWorkbookSheet(
+                workbook,
+                "ServiceReport",
+                XLSX.utils.json_to_sheet(reportsData)
+            );
             writeWorkbook(workbook);
 
             res.json({
@@ -2653,7 +2670,11 @@ app.delete(
             }
 
             reportsData.splice(reportIndex, 1);
-            workbook.Sheets["ServiceReport"] = XLSX.utils.json_to_sheet(reportsData);
+            setWorkbookSheet(
+                workbook,
+                "ServiceReport",
+                XLSX.utils.json_to_sheet(reportsData)
+            );
             writeWorkbook(workbook);
 
             res.json({
