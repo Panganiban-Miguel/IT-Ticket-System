@@ -83,6 +83,18 @@
             font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
         }
 
+        .customer-name-column {
+            width: 34%;
+        }
+
+        .customer-credits-column {
+            width: 18%;
+        }
+
+        .customer-tickets-column {
+            width: 12%;
+        }
+
         .customer-link {
             color: #1f2937;
             font-weight: 700;
@@ -128,10 +140,33 @@
                 width: 100%;
             }
 
+            .customer-id-column,
+            .customer-email-column {
+                display: none;
+            }
+
+            .database-table {
+                table-layout: fixed;
+            }
+
             .database-table th,
             .database-table td {
-                padding: 12px;
-                white-space: nowrap;
+                padding: 10px 8px;
+                font-size: 13px;
+                white-space: normal;
+            }
+
+            .customer-name-column {
+                width: 42%;
+                overflow-wrap: anywhere;
+            }
+
+            .customer-credits-column {
+                width: 38%;
+            }
+
+            .customer-tickets-column {
+                width: 20%;
             }
         }
     </style>
@@ -175,11 +210,11 @@
                     <table class="database-table">
                         <thead>
                             <tr>
-                                <th scope="col">Customer ID</th>
-                                <th scope="col">Name</th>
-                                <th scope="col">Email</th>
-                                <th scope="col">Available Credits</th>
-                                <th scope="col">Tickets</th>
+                                <th class="customer-id-column" scope="col">Customer ID</th>
+                                <th class="customer-name-column" scope="col">Name</th>
+                                <th class="customer-email-column" scope="col">Email</th>
+                                <th class="customer-credits-column" scope="col">Available Credits</th>
+                                <th class="customer-tickets-column" scope="col">Tickets</th>
                             </tr>
                         </thead>
                         <tbody id="customerTableBody"></tbody>

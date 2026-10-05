@@ -57,11 +57,12 @@
                 : "";
 
             const idCell = document.createElement("td");
-            idCell.className = "customer-id-cell";
+            idCell.className = "customer-id-cell customer-id-column";
             idCell.textContent = customer.id || "";
             row.append(idCell);
 
             const nameCell = document.createElement("td");
+            nameCell.className = "customer-name-column";
             if (customerUrl) {
                 const customerLink = document.createElement("a");
                 customerLink.className = "customer-link";
@@ -81,12 +82,16 @@
                 window.location.href = customerUrl;
             });
 
-            [customer.email, formatCredits(customer.credits), customer.totalTickets]
-                .forEach(value => {
-                    const cell = document.createElement("td");
-                    cell.textContent = String(value ?? "");
-                    row.append(cell);
-                });
+            [
+                { className: "customer-email-column", value: customer.email },
+                { className: "customer-credits-column", value: formatCredits(customer.credits) },
+                { className: "customer-tickets-column", value: customer.totalTickets }
+            ].forEach(({ className, value }) => {
+                const cell = document.createElement("td");
+                cell.className = className;
+                cell.textContent = String(value ?? "");
+                row.append(cell);
+            });
             tableBody.append(row);
         });
 
