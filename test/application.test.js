@@ -206,12 +206,32 @@ test("file-backed API baseline and ticket-creation behavior", async t => {
         assert.equal(createdTicket["Customer ID"], createdCustomer["Customer ID"]);
     });
 
+    await t.test("ticket creation requests a name before creating a new customer", async () => {
+        const response = await fetch(`${app.baseUrl}/api/tickets`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                email: "nameless@example.test",
+                issue: "New customer without a name",
+                supportType: "Remote Support"
+            })
+        });
+        const result = await response.json();
+        assert.equal(response.status, 409);
+        assert.equal(result.code, "CUSTOMER_NAME_REQUIRED");
+
+        const workbook = XLSX.readFile(app.workbookPath);
+        const customers = XLSX.utils.sheet_to_json(workbook.Sheets.Customer);
+        const tickets = XLSX.utils.sheet_to_json(workbook.Sheets.Ticket);
+        assert.equal(customers.some(customer => customer.Email === "nameless@example.test"), false);
+        assert.equal(tickets.length, ticketCount + 1);
+    });
+
     await t.test("ticket creation matches an existing customer by normalized email", async () => {
         const response = await fetch(`${app.baseUrl}/api/tickets`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                customerName: "Existing Test Customer",
                 email: " EXISTING@EXAMPLE.TEST ",
                 issue: "Existing customer lookup",
                 supportType: "Remote Support"
@@ -226,6 +246,50 @@ test("file-backed API baseline and ticket-creation behavior", async t => {
         const createdTicket = tickets.find(ticket => ticket["Ticket ID"] === result.ticketId);
         assert.equal(customers.filter(customer => customer.Email === "existing@example.test").length, 1);
         assert.equal(createdTicket["Customer ID"], "C-0000000000001");
+        assert.equal(createdTicket["Customer Name"], "Existing Test Customer");
+    });
+
+    await t.test("ticket creation requests and fills the name on an existing unnamed customer", async () => {
+        const workbook = XLSX.readFile(app.workbookPath);
+        const customers = XLSX.utils.sheet_to_json(workbook.Sheets.Customer);
+        customers[0].Name = "";
+        workbook.Sheets.Customer = XLSX.utils.json_to_sheet(customers);
+        XLSX.writeFile(workbook, app.workbookPath);
+
+        const missingNameResponse = await fetch(`${app.baseUrl}/api/tickets`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                email: "existing@example.test",
+                issue: "Repair unnamed customer",
+                supportType: "Remote Support"
+            })
+        });
+        const missingNameResult = await missingNameResponse.json();
+        assert.equal(missingNameResponse.status, 409);
+        assert.equal(missingNameResult.code, "CUSTOMER_NAME_REQUIRED");
+
+        const response = await fetch(`${app.baseUrl}/api/tickets`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                customerName: "Recovered Customer",
+                email: "existing@example.test",
+                issue: "Repair unnamed customer",
+                supportType: "Remote Support"
+            })
+        });
+        const result = await response.json();
+        assert.equal(response.status, 201);
+
+        const updatedWorkbook = XLSX.readFile(app.workbookPath);
+        const updatedCustomers = XLSX.utils.sheet_to_json(updatedWorkbook.Sheets.Customer);
+        const tickets = XLSX.utils.sheet_to_json(updatedWorkbook.Sheets.Ticket);
+        const updatedCustomer = updatedCustomers.find(customer => customer.Email === "existing@example.test");
+        const createdTicket = tickets.find(ticket => ticket["Ticket ID"] === result.ticketId);
+        assert.equal(updatedCustomers.length, 3);
+        assert.equal(updatedCustomer.Name, "Recovered Customer");
+        assert.equal(createdTicket["Customer Name"], "Recovered Customer");
     });
 
     await t.test("exact customer ID lookup still supports ticket updates", async () => {

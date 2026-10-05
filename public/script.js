@@ -155,6 +155,92 @@ const durationLabel =
 const appointmentDurationInput =
     document.getElementById("appointmentDuration");
 
+const customerNameDialog =
+    document.getElementById("customerNameDialog");
+
+const customerNameForm =
+    document.getElementById("customerNameForm");
+
+const newCustomerNameInput =
+    document.getElementById("newCustomerName");
+
+const cancelCustomerNameButton =
+    document.getElementById("cancelCustomerName");
+
+
+function promptForCustomerName() {
+    if (
+        !customerNameDialog ||
+        !customerNameForm ||
+        !newCustomerNameInput ||
+        !cancelCustomerNameButton
+    ) {
+        throw new Error("The new-customer name dialog is unavailable.");
+    }
+
+    newCustomerNameInput.value = "";
+    newCustomerNameInput.setCustomValidity("");
+    customerNameDialog.showModal();
+    newCustomerNameInput.focus();
+
+    return new Promise(resolve => {
+        let settled = false;
+
+        function cleanUp() {
+            customerNameForm.removeEventListener("submit", handleSubmit);
+            cancelCustomerNameButton.removeEventListener("click", handleCancel);
+            customerNameDialog.removeEventListener("close", handleClose);
+            newCustomerNameInput.removeEventListener("input", handleInput);
+        }
+
+        function finish(name) {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            cleanUp();
+            customerNameDialog.close();
+            resolve(name);
+        }
+
+        function handleSubmit(event) {
+            event.preventDefault();
+
+            const name = newCustomerNameInput.value.trim();
+            if (!name) {
+                newCustomerNameInput.setCustomValidity("Enter the customer's name to continue.");
+                newCustomerNameInput.reportValidity();
+                return;
+            }
+
+            newCustomerNameInput.setCustomValidity("");
+            finish(name);
+        }
+
+        function handleCancel() {
+            finish(null);
+        }
+
+        function handleInput() {
+            newCustomerNameInput.setCustomValidity("");
+        }
+
+        function handleClose() {
+            if (!settled) {
+                settled = true;
+                cleanUp();
+                resolve(null);
+            }
+        }
+
+        customerNameForm.addEventListener("submit", handleSubmit);
+        cancelCustomerNameButton.addEventListener("click", handleCancel);
+        customerNameDialog.addEventListener("close", handleClose);
+        newCustomerNameInput.addEventListener("input", handleInput);
+    });
+}
+
 
 function roundUpToHalfHour(value) {
     const numericValue = Number(value);
@@ -503,12 +589,6 @@ if (ticketForm) {
 
             const ticket = {
 
-                customerName:
-                    document.getElementById(
-                        "customerName"
-                    )?.value || "",
-
-
                 email:
                     document.getElementById(
                         "email"
@@ -557,7 +637,7 @@ if (ticketForm) {
 
             try {
 
-                const response =
+                let response =
                     await fetch(
                         "/api/tickets",
                         {
@@ -575,10 +655,28 @@ if (ticketForm) {
                         }
                     );
 
+                let result = await response.json();
 
-                const result =
-                    await response.json();
+                if (
+                    response.status === 409 &&
+                    result.code === "CUSTOMER_NAME_REQUIRED"
+                ) {
+                    const customerName = await promptForCustomerName();
+                    if (!customerName) {
+                        return;
+                    }
 
+                    ticket.customerName = customerName;
+                    const retryResponse = await fetch("/api/tickets", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify(ticket)
+                    });
+                    result = await retryResponse.json();
+                    response = retryResponse;
+                }
 
                 if (response.ok) {
 
@@ -603,6 +701,10 @@ if (ticketForm) {
 
 
                     ticketForm.reset();
+                    if (newCustomerNameInput) {
+                        newCustomerNameInput.value = "";
+                        newCustomerNameInput.setCustomValidity("");
+                    }
 
 
                     if (onSiteSupportTypeSelect) {

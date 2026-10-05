@@ -1240,12 +1240,29 @@ app.post("/api/tickets", (req, res) => {
         const submittedName =
             String(req.body.customerName || "").trim();
 
+        const matchedCustomerIndex = submittedCustomerId
+            ? customerIndexes.byId.get(String(submittedCustomerId))
+            : customerIndexes.byEmail.get(normalizeEmail(submittedEmail));
+        const matchedCustomerHasNoName =
+            matchedCustomerIndex !== undefined &&
+            !String(customersData[matchedCustomerIndex].Name || "").trim();
+        const needsCustomerName =
+            (!submittedCustomerId && matchedCustomerIndex === undefined) ||
+            matchedCustomerHasNoName;
+
+        if (needsCustomerName && !submittedName) {
+            return res.status(409).json({
+                code: "CUSTOMER_NAME_REQUIRED",
+                message: "A name is required to complete this customer record."
+            });
+        }
+
         const customerResolution =
             resolveCustomerForTicket(
                 customersData,
                 submittedCustomerId,
                 submittedEmail,
-                submittedName,
+                needsCustomerName ? submittedName : "",
                 customerIndexes
             );
 

@@ -141,6 +141,42 @@
             text-align: center;
         }
 
+        #customerNameDialog {
+            width: min(100% - 32px, 440px);
+            margin: auto;
+            padding: 28px;
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        #customerNameDialog::backdrop {
+            background: rgba(0, 0, 0, 0.5);
+        }
+
+        #customerNameDialog h2 {
+            margin-bottom: 10px;
+        }
+
+        #customerNameDialog p {
+            margin-bottom: 20px;
+            color: #6b7280;
+            font-size: 14px;
+        }
+
+        .dialog-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .dialog-actions button {
+            margin-top: 0;
+        }
+
+        .dialog-actions .secondary-button {
+            background: #6b7280;
+        }
+
         @media (max-width: 650px) {
             .navbar {
                 padding: 0 20px;
@@ -167,11 +203,6 @@
             <p class="subtitle">Record the customer issue and support details for the IT team.</p>
 
             <form id="ticketForm">
-                <div class="form-group">
-                    <label for="customerName">Customer Name</label>
-                    <input type="text" id="customerName" placeholder="Customer name" required>
-                </div>
-
                 <div class="form-group">
                     <label for="email">Email</label>
                     <input type="email" id="email" placeholder="Customer email" required>
@@ -230,6 +261,21 @@
             </form>
         </div>
     </main>
+
+    <dialog id="customerNameDialog" aria-labelledby="customerNameDialogTitle" aria-describedby="customerNameDialogDescription">
+        <form id="customerNameForm">
+            <h2 id="customerNameDialogTitle">New customer</h2>
+            <p id="customerNameDialogDescription">A name is needed to complete this customer record. Enter the customer's name to continue.</p>
+            <div class="form-group">
+                <label for="newCustomerName">Customer name</label>
+                <input type="text" id="newCustomerName" maxlength="120" autocomplete="name" required>
+            </div>
+            <div class="dialog-actions">
+                <button type="button" class="secondary-button" id="cancelCustomerName">Cancel</button>
+                <button type="submit">Continue</button>
+            </div>
+        </form>
+    </dialog>
 
     <script src="/script.js"></script>
 </body>
