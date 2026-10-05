@@ -1601,6 +1601,7 @@ async function viewSavedReport() {
         const repDate = document.getElementById("repDate");
         const repTime = document.getElementById("repTime");
         const repHours = document.getElementById("repHours");
+        const repCreditSettlement = document.getElementById("repCreditSettlement");
         const repTasks = document.getElementById("repTasks");
         const repResolution = document.getElementById("repResolution");
 
@@ -1646,6 +1647,29 @@ async function viewSavedReport() {
 
         if (repHours) {
             repHours.textContent = `${report.HoursSpent || 0} Hours`;
+        }
+
+        if (repCreditSettlement) {
+            const billableCredits = Number(report["Billable Credits"] || 0);
+            const chargedCredits = Number(report["Credits Charged"] || 0);
+            const unpaidCredits = Number(report["Unpaid Credits"] || 0);
+            const settlementStatus = report["Credit Settlement Status"] || "";
+
+            if (unpaidCredits > 0) {
+                repCreditSettlement.textContent =
+                    `UNPAID: ${unpaidCredits} credit(s) — staff follow-up required. ${chargedCredits} of ${billableCredits} credit(s) charged.`;
+                repCreditSettlement.style.color = "#b91c1c";
+                repCreditSettlement.style.fontWeight = "bold";
+            } else if (settlementStatus === "Exempt") {
+                repCreditSettlement.textContent = "Exempt (Project)";
+                repCreditSettlement.style.color = "";
+                repCreditSettlement.style.fontWeight = "";
+            } else {
+                repCreditSettlement.textContent =
+                    `${billableCredits} billable credit(s); ${chargedCredits} charged.`;
+                repCreditSettlement.style.color = "";
+                repCreditSettlement.style.fontWeight = "";
+            }
         }
 
         if (repTasks) {

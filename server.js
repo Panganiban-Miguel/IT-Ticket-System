@@ -494,6 +494,138 @@ function validateServiceReport(body) {
     return null;
 }
 
+function isCreditBillableTicket(ticket) {
+    return (
+        String(ticket["Support Type"] || "").trim().toLowerCase() === "on-site support" &&
+        String(ticket["On-site Support Type"] || "").trim().toLowerCase() !== "project"
+    );
+}
+
+function getTicketEstimatedCredits(ticket) {
+    if (!isCreditBillableTicket(ticket)) {
+        return 0;
+    }
+
+    const duration = Number(ticket["Appointment Duration"] || 0);
+    return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
+
+function findTicketCustomer(customersData, ticket) {
+    const customerId = String(ticket["Customer ID"] || "").trim();
+    let customerIndex = customerId
+        ? customersData.findIndex(
+            customer => String(customer["Customer ID"] || "").trim() === customerId
+        )
+        : -1;
+
+    if (customerIndex === -1) {
+        const email = String(ticket.Email || "").trim().toLowerCase();
+        if (email) {
+            customerIndex = customersData.findIndex(
+                customer => String(customer.Email || "").trim().toLowerCase() === email
+            );
+        }
+    }
+
+    return customerIndex;
+}
+
+function settleTicketCredits(workbook, ticket, billableCredits) {
+    const estimatedCredits = getTicketEstimatedCredits(ticket);
+    const storedChargedCredits = ticket["Credits Charged"];
+    const chargedCredits = storedChargedCredits === undefined || storedChargedCredits === ""
+        ? estimatedCredits
+        : Number(storedChargedCredits);
+    const storedBillableCredits = ticket["Billable Credits"];
+    const previousBillableCredits = storedBillableCredits === undefined || storedBillableCredits === ""
+        ? chargedCredits
+        : Number(storedBillableCredits);
+
+    if (
+        !Number.isFinite(chargedCredits) ||
+        !Number.isFinite(previousBillableCredits) ||
+        !Number.isFinite(billableCredits) ||
+        billableCredits < 0
+    ) {
+        return { error: "Ticket credit information is invalid." };
+    }
+
+    let customerCredits = 0;
+    let additionalCredits = 0;
+    let refundedCredits = 0;
+    let actualChargedCredits = chargedCredits;
+
+    if (billableCredits !== previousBillableCredits) {
+        const customerWorksheet = workbook.Sheets["Customer"];
+        if (!customerWorksheet) {
+            return { error: "Customer sheet not found; ticket credits could not be settled." };
+        }
+
+        const customersData = XLSX.utils.sheet_to_json(customerWorksheet);
+        const customerIndex = findTicketCustomer(customersData, ticket);
+        if (customerIndex === -1) {
+            return { error: "Customer not found; ticket credits could not be settled." };
+        }
+
+        const customer = customersData[customerIndex];
+        const currentCredits = Number(customer.Credits || 0);
+        if (!Number.isFinite(currentCredits)) {
+            return { error: "Customer credit balance is invalid." };
+        }
+
+        if (billableCredits > previousBillableCredits) {
+            const difference = billableCredits - previousBillableCredits;
+            additionalCredits = Math.min(difference, Math.max(0, currentCredits));
+            customer.Credits = currentCredits - additionalCredits;
+            actualChargedCredits += additionalCredits;
+        } else {
+            refundedCredits = Math.max(0, actualChargedCredits - billableCredits);
+            customer.Credits = currentCredits + refundedCredits;
+            actualChargedCredits -= refundedCredits;
+        }
+
+        customerCredits = Number(customer.Credits);
+        workbook.Sheets["Customer"] = XLSX.utils.json_to_sheet(customersData);
+    }
+
+    ticket["Credits Charged"] = actualChargedCredits;
+    ticket["Billable Credits"] = billableCredits;
+    ticket["Unpaid Credits"] = Math.max(0, billableCredits - actualChargedCredits);
+    ticket["Credit Settlement Status"] = "Settled";
+
+    return {
+        actualChargedCredits,
+        additionalCredits,
+        refundedCredits,
+        unpaidCredits: ticket["Unpaid Credits"],
+        remainingCredits: customerCredits
+    };
+}
+
+function getServiceReportCreditMessage(ticket, billableCredits, settlement) {
+    if (!isCreditBillableTicket(ticket)) {
+        return String(ticket["On-site Support Type"] || "").trim().toLowerCase() === "project"
+            ? "Service report generated and saved successfully. Project tickets are exempt from credits."
+            : "Service report generated and saved successfully.";
+    }
+
+    const adjustments = [];
+    if (settlement.refundedCredits > 0) {
+        adjustments.push(`${settlement.refundedCredits} credit(s) refunded`);
+    }
+    if (settlement.additionalCredits > 0) {
+        adjustments.push(`${settlement.additionalCredits} additional credit(s) charged`);
+    }
+    if (settlement.unpaidCredits > 0) {
+        adjustments.push(`${settlement.unpaidCredits} unpaid credit(s) flagged for staff`);
+    }
+
+    return [
+        `Service report generated and saved successfully. Final billable amount: ${billableCredits} credit(s).`,
+        ...adjustments
+    ].join(" ");
+}
+
 function addCustomerToIndexes(customerIndexes, customer, customerIndex) {
     const customerId = String(customer["Customer ID"] || "");
     const trimmedCustomerId = customerId.trim();
@@ -1411,6 +1543,24 @@ app.post("/api/tickets", (req, res) => {
             "Appointment Duration":
                 appointmentDuration,
 
+            "Credits Charged":
+                isOnSiteSupportRequest && onSiteSupportType !== "Project"
+                    ? appointmentDuration
+                    : 0,
+
+            "Billable Credits":
+                isOnSiteSupportRequest && onSiteSupportType !== "Project"
+                    ? appointmentDuration
+                    : 0,
+
+            "Unpaid Credits":
+                0,
+
+            "Credit Settlement Status":
+                isOnSiteSupportRequest
+                    ? onSiteSupportType === "Project" ? "Exempt" : "Pending"
+                    : "Not Applicable",
+
             "Appointment Status":
                 "Pending",
 
@@ -1967,208 +2117,64 @@ app.delete(
             const ticketToDelete =
                 ticketsData[ticketIndex];
 
-            const supportType =
-                String(
-                    ticketToDelete["Support Type"] || ""
-                ).trim();
-
-            const ticketStatus =
-                String(
-                    ticketToDelete["Status"] || ""
-                ).trim();
-
-            const appointmentStatus =
-                String(
-                    ticketToDelete["Appointment Status"] || ""
-                ).trim();
-
-            const assignedEngineer =
-                String(
-                    ticketToDelete["Assigned Engineer"] || ""
-                ).trim();
-
-            const appointmentDuration =
-                Number(
-                    ticketToDelete["Appointment Duration"] || 0
-                );
-
-            const serviceResult =
-                String(
-                    ticketToDelete["Service Result"] || ""
-                ).trim();
-
-            const hasServiceReport =
-                (() => {
-                    const workbookReports =
-                        workbook.Sheets["ServiceReport"];
-
-                    if (!workbookReports) {
-                        return false;
-                    }
-
-                    const reportsData =
-                        XLSX.utils.sheet_to_json(
-                            workbookReports
-                        );
-
-                    return reportsData.some(
-                        report =>
-                            String(report["Ticket ID"] || "").trim() === ticketId
-                    );
-                })();
-
-            const activeStatuses =
-                ["open", "in progress"];
-
-            const pendingAppointmentStatuses =
-                ["pending", "reschedule required"];
-
-            const isOnSiteSupport =
-                supportType.toLowerCase() ===
-                "on-site support";
-
-            const isOpenOrInProgress =
-                activeStatuses.includes(
-                    ticketStatus.toLowerCase()
-                );
-
-            const isPendingOrReschedule =
-                pendingAppointmentStatuses.includes(
-                    appointmentStatus.toLowerCase()
-                );
-
-            const isServiceResultEmpty =
-                serviceResult === "";
-
-            const isServiceReportMissing =
-                !hasServiceReport;
-
-            const refundCheck = {
-                ticketId,
-                supportType,
-                ticketStatus,
-                appointmentStatus,
-                assignedEngineer,
-                appointmentDuration,
-                serviceResult,
-                hasServiceReport,
-                isOnSiteSupport,
-                isOpenOrInProgress,
-                isPendingOrReschedule,
-                isServiceResultEmpty,
-                isServiceReportMissing,
-                refundEligible:
-                    isOnSiteSupport &&
-                    isOpenOrInProgress &&
-                    isPendingOrReschedule &&
-                    isServiceResultEmpty &&
-                    isServiceReportMissing &&
-                    Number.isFinite(appointmentDuration) &&
-                    appointmentDuration > 0
-            };
-
-            console.log(
-                "Delete refund eligibility debug:",
-                JSON.stringify(refundCheck, null, 2)
-            );
-
             let refundApplied = false;
             let refundedCredits = 0;
-            const refundReasons = [];
+            const ticketReports = workbook.Sheets["ServiceReport"]
+                ? XLSX.utils.sheet_to_json(workbook.Sheets["ServiceReport"])
+                    .filter(report => String(report["Ticket ID"] || "").trim() === ticketId)
+                : [];
+            const hasServiceReport = ticketReports.length > 0;
+            const settlementStatus = String(
+                ticketToDelete["Credit Settlement Status"] || ""
+            ).trim();
+            const shouldRefundEstimate =
+                isCreditBillableTicket(ticketToDelete) &&
+                !hasServiceReport &&
+                settlementStatus !== "Settled";
 
-            if (!isOnSiteSupport) {
-                refundReasons.push("Support type is not On-site Support.");
-            }
+            if (shouldRefundEstimate) {
+                const estimatedCredits = Number(
+                    ticketToDelete["Credits Charged"] === undefined ||
+                    ticketToDelete["Credits Charged"] === ""
+                        ? getTicketEstimatedCredits(ticketToDelete)
+                        : ticketToDelete["Credits Charged"]
+                );
 
-            if (!isOpenOrInProgress) {
-                refundReasons.push("Ticket status is not Open/In Progress.");
-            }
+                if (!Number.isFinite(estimatedCredits) || estimatedCredits < 0) {
+                    return res.status(500).json({
+                        message: "Ticket credit information is invalid; unable to delete ticket."
+                    });
+                }
 
-            if (!isPendingOrReschedule) {
-                refundReasons.push("Appointment status is not Pending/Reschedule Required.");
-            }
+                if (estimatedCredits > 0) {
+                    const customerWorksheet =
+                        workbook.Sheets["Customer"];
 
-            if (!isServiceResultEmpty) {
-                refundReasons.push("Service result is not empty.");
-            }
-
-            if (!isServiceReportMissing) {
-                refundReasons.push("A service report already exists.");
-            }
-
-            if (
-                !Number.isFinite(appointmentDuration) ||
-                appointmentDuration <= 0
-            ) {
-                refundReasons.push("Appointment duration is invalid or zero.");
-            }
-
-            if (
-                isOnSiteSupport &&
-                isOpenOrInProgress &&
-                isPendingOrReschedule &&
-                isServiceResultEmpty &&
-                isServiceReportMissing &&
-                Number.isFinite(appointmentDuration) &&
-                appointmentDuration > 0
-            ) {
-                const customerWorksheet =
-                    workbook.Sheets["Customer"];
-
-                if (customerWorksheet) {
-                    const customersData =
-                        XLSX.utils.sheet_to_json(
-                            customerWorksheet
-                        );
-
-                    const customerId =
-                        String(
-                            ticketToDelete["Customer ID"] || ""
-                        ).trim();
-
-                    const customerEmail =
-                        String(
-                            ticketToDelete["Email"] || ""
-                        ).trim();
-
-                    let customerIndex = -1;
-                    let targetCustomer = null;
-
-                    if (customerId) {
-                        customerIndex = customersData.findIndex(
-                            customer =>
-                                String(customer["Customer ID"] || "").trim() === customerId
-                        );
+                    if (!customerWorksheet) {
+                        return res.status(500).json({
+                            message: "Customer sheet not found; unable to refund ticket credits."
+                        });
                     }
 
-                    if (customerIndex === -1 && customerEmail) {
-                        customerIndex = customersData.findIndex(
-                            customer =>
-                                String(customer["Email"] || "").trim().toLowerCase() === customerEmail.toLowerCase()
-                        );
+                    const customersData = XLSX.utils.sheet_to_json(customerWorksheet);
+                    const customerIndex = findTicketCustomer(customersData, ticketToDelete);
+                    if (customerIndex === -1) {
+                        return res.status(500).json({
+                            message: "Customer not found; unable to refund ticket credits."
+                        });
                     }
 
-                    if (customerIndex !== -1) {
-                        targetCustomer = customersData[customerIndex];
-
-                        const currentCredits =
-                            Number(
-                                targetCustomer["Credits"] || 0
-                            );
-
-                        refundedCredits =
-                            appointmentDuration;
-
-                        targetCustomer["Credits"] =
-                            currentCredits + refundedCredits;
-
-                        workbook.Sheets["Customer"] =
-                            XLSX.utils.json_to_sheet(
-                                customersData
-                            );
-
-                        refundApplied = true;
+                    const currentCredits = Number(customersData[customerIndex].Credits || 0);
+                    if (!Number.isFinite(currentCredits)) {
+                        return res.status(500).json({
+                            message: "Customer credit balance is invalid; unable to refund ticket credits."
+                        });
                     }
+
+                    refundedCredits = estimatedCredits;
+                    customersData[customerIndex].Credits = currentCredits + refundedCredits;
+                    workbook.Sheets["Customer"] = XLSX.utils.json_to_sheet(customersData);
+                    refundApplied = true;
                 }
             }
 
@@ -2199,14 +2205,6 @@ app.delete(
                 "Amount:",
                 refundedCredits
             );
-
-            if (!refundApplied && refundReasons.length > 0) {
-                console.log(
-                    "Refund skipped because:",
-                    refundReasons
-                );
-            }
-
 
             res.json({
 
@@ -2347,20 +2345,30 @@ app.get("/api/staff", (req, res) => {
    SUBMIT SERVICE REPORT
 ========================================================= */
 
-function calculateServiceReportHours(signInTime, signOutTime) {
+function getServiceReportDurationMs(signInTime, signOutTime) {
     if (!signInTime || !signOutTime) {
         return 0;
     }
 
     const start = new Date(`1970-01-01T${signInTime}:00`);
     const end = new Date(`1970-01-01T${signOutTime}:00`);
-    const diffMs = end - start;
+    let diffMs = end - start;
 
-    if (diffMs <= 0) {
-        return 0;
+    if (diffMs < 0) {
+        diffMs += 24 * 60 * 60 * 1000;
     }
 
-    return +(diffMs / (1000 * 60 * 60)).toFixed(2);
+    return diffMs;
+}
+
+function calculateServiceReportHours(signInTime, signOutTime) {
+    const durationMs = getServiceReportDurationMs(signInTime, signOutTime);
+    return +(durationMs / (1000 * 60 * 60)).toFixed(2);
+}
+
+function calculateBillableServiceReportCredits(signInTime, signOutTime) {
+    const durationMs = getServiceReportDurationMs(signInTime, signOutTime);
+    return Math.ceil(durationMs / (30 * 60 * 1000)) / 2;
 }
 
 function normalizeServiceMode(mode, legacyOnsite) {
@@ -2410,6 +2418,7 @@ function buildServiceReportFromTicket(ticket, overrides = {}) {
         "SignInTime": signInTime || "",
         "SignOutTime": signOutTime || "",
         "HoursSpent": hoursSpent,
+        "Billable Credits": calculateBillableServiceReportCredits(signInTime, signOutTime),
         "TasksDone": tasksDone || "",
         "Resolution": resolution || "",
         "Created At": new Date().toISOString()
@@ -2518,6 +2527,49 @@ app.post(
                 resolution
             });
 
+            let creditSettlement = {
+                actualChargedCredits: 0,
+                additionalCredits: 0,
+                refundedCredits: 0,
+                unpaidCredits: 0,
+                remainingCredits: null
+            };
+            let billableCredits = 0;
+
+            if (isCreditBillableTicket(ticket)) {
+                billableCredits = calculateBillableServiceReportCredits(
+                    signInTime,
+                    signOutTime
+                );
+                if (billableCredits <= 0) {
+                    return res.status(400).json({
+                        message: "A billable on-site service report requires sign-in and sign-out times with a positive duration."
+                    });
+                }
+
+                creditSettlement = settleTicketCredits(
+                    workbook,
+                    ticket,
+                    billableCredits
+                );
+                if (creditSettlement.error) {
+                    return res.status(500).json({ message: creditSettlement.error });
+                }
+            } else if (
+                String(ticket["On-site Support Type"] || "").trim().toLowerCase() === "project"
+            ) {
+                ticket["Credit Settlement Status"] = "Exempt";
+            } else {
+                ticket["Credit Settlement Status"] = "Not Applicable";
+            }
+
+            Object.assign(newReport, {
+                "Billable Credits": billableCredits,
+                "Credits Charged": creditSettlement.actualChargedCredits,
+                "Unpaid Credits": creditSettlement.unpaidCredits,
+                "Credit Settlement Status": ticket["Credit Settlement Status"]
+            });
+
             reportsData.push(newReport);
 
             ticketsData[ticketIndex]["Status"] = "Closed";
@@ -2539,8 +2591,9 @@ app.post(
             console.log("Service report created:", newReport);
 
             res.status(201).json({
-                message: "Service report generated and saved successfully.",
-                report: newReport
+                message: getServiceReportCreditMessage(ticket, billableCredits, creditSettlement),
+                report: newReport,
+                creditSettlement
             });
 
         } catch (error) {
@@ -2594,6 +2647,56 @@ app.put(
             }
 
             const existingReport = reportsData[reportIndex];
+            const ticketSheet = workbook.Sheets["Ticket"];
+            if (!ticketSheet) {
+                return res.status(404).json({ message: "Ticket sheet not found." });
+            }
+
+            const ticketsData = XLSX.utils.sheet_to_json(ticketSheet);
+            const ticketIndex = ticketsData.findIndex(ticket => ticket["Ticket ID"] === ticketId);
+            if (ticketIndex === -1) {
+                return res.status(404).json({ message: "Ticket not found." });
+            }
+
+            const ticket = ticketsData[ticketIndex];
+            const nextSignInTime = signInTime || existingReport.SignInTime || "";
+            const nextSignOutTime = signOutTime || existingReport.SignOutTime || "";
+            let billableCredits = 0;
+            let creditSettlement = {
+                actualChargedCredits: 0,
+                additionalCredits: 0,
+                refundedCredits: 0,
+                unpaidCredits: 0,
+                remainingCredits: null
+            };
+
+            if (isCreditBillableTicket(ticket)) {
+                billableCredits = calculateBillableServiceReportCredits(
+                    nextSignInTime,
+                    nextSignOutTime
+                );
+                if (billableCredits <= 0) {
+                    return res.status(400).json({
+                        message: "A billable on-site service report requires sign-in and sign-out times with a positive duration."
+                    });
+                }
+
+                creditSettlement = settleTicketCredits(
+                    workbook,
+                    ticket,
+                    billableCredits
+                );
+                if (creditSettlement.error) {
+                    return res.status(500).json({ message: creditSettlement.error });
+                }
+            } else if (
+                String(ticket["On-site Support Type"] || "").trim().toLowerCase() === "project"
+            ) {
+                ticket["Credit Settlement Status"] = "Exempt";
+            } else {
+                ticket["Credit Settlement Status"] = "Not Applicable";
+            }
+
             const resolvedServiceMode = normalizeServiceMode(serviceMode, onsite ?? (existingReport.Onsite === "Yes"));
             const updatedReport = {
                 ...existingReport,
@@ -2601,28 +2704,24 @@ app.put(
                 "ServiceMode": resolvedServiceMode,
                 "Onsite": ["On-site", "Hybrid"].includes(resolvedServiceMode) ? "Yes" : "No",
                 "Date": date || existingReport.Date || new Date().toISOString().split("T")[0],
-                "SignInTime": signInTime || existingReport.SignInTime || "",
-                "SignOutTime": signOutTime || existingReport.SignOutTime || "",
+                "SignInTime": nextSignInTime,
+                "SignOutTime": nextSignOutTime,
                 "TasksDone": tasksDone || existingReport.TasksDone || "",
                 "Resolution": resolution || existingReport.Resolution || "",
-                "HoursSpent": calculateServiceReportHours(signInTime || existingReport.SignInTime || "", signOutTime || existingReport.SignOutTime || "")
+                "HoursSpent": calculateServiceReportHours(nextSignInTime, nextSignOutTime),
+                "Billable Credits": billableCredits,
+                "Credits Charged": creditSettlement.actualChargedCredits,
+                "Unpaid Credits": creditSettlement.unpaidCredits,
+                "Credit Settlement Status": ticket["Credit Settlement Status"]
             };
 
             reportsData[reportIndex] = updatedReport;
 
-            const ticketSheet = workbook.Sheets["Ticket"];
-            if (ticketSheet) {
-                const ticketsData = XLSX.utils.sheet_to_json(ticketSheet);
-                const ticketIndex = ticketsData.findIndex(ticket => ticket["Ticket ID"] === ticketId);
-
-                if (ticketIndex !== -1) {
-                    ticketsData[ticketIndex]["Service Result"] = updatedReport.Resolution || "";
-                    if (engineer) {
-                        ticketsData[ticketIndex]["Assigned Engineer"] = engineer;
-                    }
-                    workbook.Sheets["Ticket"] = XLSX.utils.json_to_sheet(ticketsData);
-                }
+            ticket["Service Result"] = updatedReport.Resolution || "";
+            if (engineer) {
+                ticket["Assigned Engineer"] = engineer;
             }
+            workbook.Sheets["Ticket"] = XLSX.utils.json_to_sheet(ticketsData);
 
             setWorkbookSheet(
                 workbook,
@@ -2632,8 +2731,10 @@ app.put(
             writeWorkbook(workbook);
 
             res.json({
-                message: "Service report updated successfully.",
-                report: updatedReport
+                message: getServiceReportCreditMessage(ticket, billableCredits, creditSettlement)
+                    .replace("generated and saved", "updated and saved"),
+                report: updatedReport,
+                creditSettlement
             });
 
         } catch (error) {

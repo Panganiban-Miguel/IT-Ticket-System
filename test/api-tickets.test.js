@@ -106,6 +106,40 @@ async function loginStaff() {
     return response.headers.get("set-cookie").split(";")[0];
 }
 
+async function createOnSiteTicket(onSiteSupportType = "Maintenance", appointmentDuration = 1) {
+    const response = await fetch(`${baseUrl}/api/tickets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            customerId: "C-100",
+            issue: `Test ${onSiteSupportType} service`,
+            supportType: "On-site Support",
+            onSiteSupportType,
+            appointmentDate: "2099-01-01",
+            appointmentTime: "12:00",
+            appointmentDuration
+        })
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 201, body.message);
+    return body.ticketId;
+}
+
+async function submitServiceReport(ticketId, signInTime = "09:00", signOutTime = "10:00", method = "POST") {
+    return fetch(`${baseUrl}/api/tickets/${ticketId}/service-report`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            serviceMode: "On-site",
+            date: "2026-10-05",
+            signInTime,
+            signOutTime,
+            resolution: "Service completed"
+        })
+    });
+}
+
 before(async () => {
     writeWorkbook();
     server = app.listen(0, "127.0.0.1");
@@ -177,6 +211,184 @@ test("POST /api/tickets creates a ticket for an existing customer", async () => 
     assert.ok(body.ticketId);
     assert.equal(tickets.length, 2);
     assert.equal(tickets[1].Issue, "New staff-created issue");
+});
+
+test("POST /api/tickets charges the rounded estimate for billable on-site support", async () => {
+    const ticketId = await createOnSiteTicket("Maintenance", 1.2);
+    const workbook = XLSX.readFile(databasePath);
+    const customers = XLSX.utils.sheet_to_json(workbook.Sheets.Customer);
+    const ticket = XLSX.utils.sheet_to_json(workbook.Sheets.Ticket)
+        .find(row => row["Ticket ID"] === ticketId);
+
+    assert.equal(customers[0].Credits, 3.5);
+    assert.equal(ticket["Appointment Duration"], 1.5);
+    assert.equal(ticket["Credits Charged"], 1.5);
+    assert.equal(ticket["Credit Settlement Status"], "Pending");
+});
+
+test("POST /api/tickets rejects an on-site request when the estimate exceeds available credits", async () => {
+    const response = await fetch(`${baseUrl}/api/tickets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            customerId: "C-100",
+            issue: "Over-budget on-site service",
+            supportType: "On-site Support",
+            onSiteSupportType: "Maintenance",
+            appointmentDate: "2099-01-01",
+            appointmentTime: "12:00",
+            appointmentDuration: 6
+        })
+    });
+    const body = await response.json();
+    const workbook = XLSX.readFile(databasePath);
+    const tickets = XLSX.utils.sheet_to_json(workbook.Sheets.Ticket);
+    const customers = XLSX.utils.sheet_to_json(workbook.Sheets.Customer);
+
+    assert.equal(response.status, 400);
+    assert.match(body.message, /only has 5 credit/);
+    assert.equal(tickets.length, 1);
+    assert.equal(customers[0].Credits, 5);
+});
+
+test("on-site Projects do not consume credits when requested or reported", async () => {
+    const ticketId = await createOnSiteTicket("Project", 1);
+    const afterRequest = XLSX.utils.sheet_to_json(
+        XLSX.readFile(databasePath).Sheets.Customer
+    );
+    const response = await submitServiceReport(ticketId, "", "");
+    const body = await response.json();
+    const workbook = XLSX.readFile(databasePath);
+    const customers = XLSX.utils.sheet_to_json(workbook.Sheets.Customer);
+    const ticket = XLSX.utils.sheet_to_json(workbook.Sheets.Ticket)
+        .find(row => row["Ticket ID"] === ticketId);
+
+    assert.equal(afterRequest[0].Credits, 5);
+    assert.equal(response.status, 201);
+    assert.match(body.message, /Project tickets are exempt/);
+    assert.equal(customers[0].Credits, 5);
+    assert.equal(ticket["Credit Settlement Status"], "Exempt");
+    assert.equal(body.report["Billable Credits"], 0);
+});
+
+test("service report settlement rounds actual work up to half-hour increments and refunds the estimate difference", async () => {
+    const ticketId = await createOnSiteTicket("Maintenance", 1.5);
+    const response = await submitServiceReport(ticketId, "09:00", "09:12");
+    const body = await response.json();
+    const workbook = XLSX.readFile(databasePath);
+    const customers = XLSX.utils.sheet_to_json(workbook.Sheets.Customer);
+    const ticket = XLSX.utils.sheet_to_json(workbook.Sheets.Ticket)
+        .find(row => row["Ticket ID"] === ticketId);
+
+    assert.equal(response.status, 201);
+    assert.equal(body.report.HoursSpent, 0.2);
+    assert.equal(body.report["Billable Credits"], 0.5);
+    assert.equal(body.creditSettlement.refundedCredits, 1);
+    assert.equal(customers[0].Credits, 4.5);
+    assert.equal(ticket["Credits Charged"], 0.5);
+    assert.equal(ticket["Unpaid Credits"], 0);
+});
+
+test("billable on-site reports without a positive work duration are rejected without refunding the estimate", async () => {
+    const ticketId = await createOnSiteTicket("Maintenance", 1);
+    const response = await submitServiceReport(ticketId, "", "");
+    const body = await response.json();
+    const workbook = XLSX.readFile(databasePath);
+    const customers = XLSX.utils.sheet_to_json(workbook.Sheets.Customer);
+    const ticket = XLSX.utils.sheet_to_json(workbook.Sheets.Ticket)
+        .find(row => row["Ticket ID"] === ticketId);
+
+    assert.equal(response.status, 400);
+    assert.match(body.message, /requires sign-in and sign-out times/);
+    assert.equal(customers[0].Credits, 4);
+    assert.equal(ticket["Credit Settlement Status"], "Pending");
+});
+
+test("service report settlement deducts affordable additional half-hour credits", async () => {
+    const ticketId = await createOnSiteTicket("Maintenance", 1);
+    const response = await submitServiceReport(ticketId, "09:00", "10:12");
+    const body = await response.json();
+    const workbook = XLSX.readFile(databasePath);
+    const customers = XLSX.utils.sheet_to_json(workbook.Sheets.Customer);
+
+    assert.equal(response.status, 201);
+    assert.equal(body.creditSettlement.additionalCredits, 0.5);
+    assert.equal(body.creditSettlement.unpaidCredits, 0);
+    assert.equal(customers[0].Credits, 3.5);
+});
+
+test("service report settlement charges additional credits and flags any unaffordable remainder", async () => {
+    const ticketId = await createOnSiteTicket("Maintenance", 1);
+    const workbookBeforeReport = XLSX.readFile(databasePath);
+    const customersBeforeReport = XLSX.utils.sheet_to_json(workbookBeforeReport.Sheets.Customer);
+    customersBeforeReport[0].Credits = 0;
+    workbookBeforeReport.Sheets.Customer = XLSX.utils.json_to_sheet(customersBeforeReport);
+    XLSX.writeFile(workbookBeforeReport, databasePath);
+
+    const response = await submitServiceReport(ticketId, "09:00", "10:12");
+    const body = await response.json();
+    const savedWorkbook = XLSX.readFile(databasePath);
+    const customers = XLSX.utils.sheet_to_json(savedWorkbook.Sheets.Customer);
+    const ticket = XLSX.utils.sheet_to_json(savedWorkbook.Sheets.Ticket)
+        .find(row => row["Ticket ID"] === ticketId);
+
+    assert.equal(response.status, 201);
+    assert.equal(body.report["Billable Credits"], 1.5);
+    assert.equal(body.creditSettlement.additionalCredits, 0);
+    assert.equal(body.creditSettlement.unpaidCredits, 0.5);
+    assert.match(body.message, /0.5 unpaid credit/);
+    assert.equal(customers[0].Credits, 0);
+    assert.equal(ticket["Credits Charged"], 1);
+    assert.equal(ticket["Unpaid Credits"], 0.5);
+    assert.equal(ticket["Credit Settlement Status"], "Settled");
+});
+
+test("service report edits reconcile credits against the previous settlement", async () => {
+    const ticketId = await createOnSiteTicket("Maintenance", 1);
+    const initialReportResponse = await submitServiceReport(ticketId, "09:00", "10:00");
+    assert.equal(initialReportResponse.status, 201);
+
+    const editResponse = await submitServiceReport(ticketId, "09:00", "10:30", "PUT");
+    const editBody = await editResponse.json();
+    const workbook = XLSX.readFile(databasePath);
+    const customers = XLSX.utils.sheet_to_json(workbook.Sheets.Customer);
+    const ticket = XLSX.utils.sheet_to_json(workbook.Sheets.Ticket)
+        .find(row => row["Ticket ID"] === ticketId);
+
+    assert.equal(editResponse.status, 200);
+    assert.equal(editBody.report["Billable Credits"], 1.5);
+    assert.equal(editBody.creditSettlement.additionalCredits, 0.5);
+    assert.equal(customers[0].Credits, 3.5);
+    assert.equal(ticket["Credits Charged"], 1.5);
+});
+
+test("deleting a ticket refunds only its unsettled estimate", async () => {
+    const pendingTicketId = await createOnSiteTicket("Maintenance", 1);
+    const cookie = await loginStaff();
+    const pendingDelete = await fetch(`${baseUrl}/api/tickets/${pendingTicketId}`, {
+        method: "DELETE",
+        headers: { Cookie: cookie }
+    });
+    assert.equal(pendingDelete.status, 200);
+    let workbook = XLSX.readFile(databasePath);
+    assert.equal(XLSX.utils.sheet_to_json(workbook.Sheets.Customer)[0].Credits, 5);
+
+    const settledTicketId = await createOnSiteTicket("Maintenance", 1);
+    const reportResponse = await submitServiceReport(settledTicketId, "09:00", "10:00");
+    assert.equal(reportResponse.status, 201);
+    const reportDeleteResponse = await fetch(
+        `${baseUrl}/api/tickets/${settledTicketId}/service-report`,
+        { method: "DELETE" }
+    );
+    assert.equal(reportDeleteResponse.status, 200);
+    const settledDelete = await fetch(`${baseUrl}/api/tickets/${settledTicketId}`, {
+        method: "DELETE",
+        headers: { Cookie: cookie }
+    });
+    workbook = XLSX.readFile(databasePath);
+
+    assert.equal(settledDelete.status, 200);
+    assert.equal(XLSX.utils.sheet_to_json(workbook.Sheets.Customer)[0].Credits, 4);
 });
 
 test("POST /api/tickets rejects oversized fields without creating a customer", async () => {
