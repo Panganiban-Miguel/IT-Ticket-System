@@ -4,6 +4,14 @@ const crypto = require("node:crypto");
 const fs = require("fs");
 const path = require("path");
 const XLSX = require("xlsx");
+const {
+    appointmentInterval,
+    chooseTechnician,
+    getAppointmentCandidate,
+    hasSchedulingConflict,
+    localDateTime,
+    projectReservationDates
+} = require("./scheduler");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -190,7 +198,7 @@ function releaseWorkbookLock() {
     } catch (_) {}
 }
 
-function writeWorkbook(workbook) {
+function writeWorkbook(workbook, beforeWrite) {
     acquireWorkbookLock();
 
     const tempWorkbookPath = path.join(
@@ -199,6 +207,9 @@ function writeWorkbook(workbook) {
     );
 
     try {
+        if (beforeWrite) {
+            beforeWrite();
+        }
         XLSX.writeFile(workbook, tempWorkbookPath);
 
         try {
@@ -234,6 +245,63 @@ function writeWorkbook(workbook) {
 
     return true;
 }
+
+
+function validateAppointmentBusinessHours(appointmentTime, durationHours) {
+    // Validate that a time was provided
+    if (!appointmentTime) {
+        return "Please select an appointment time.";
+    }
+
+    // Validate duration
+    if (
+        typeof durationHours !== "number" ||
+        !Number.isFinite(durationHours) ||
+        durationHours <= 0 ||
+        durationHours % 0.5 !== 0
+    ) {
+        return "Please select a valid appointment duration.";
+    }
+
+    // Parse HH:MM
+    const [hours, minutes] = appointmentTime.split(":").map(Number);
+
+    if (
+        !Number.isInteger(hours) ||
+        !Number.isInteger(minutes) ||
+        hours < 0 ||
+        hours > 23 ||
+        minutes < 0 ||
+        minutes > 59
+    ) {
+        return "Please select a valid appointment time.";
+    }
+
+    const startMinutes = hours * 60 + minutes;
+    const endMinutes = startMinutes + durationHours * 60;
+
+    const openingMinutes = 9 * 60;  // 9:00 AM
+    const closingMinutes = 18 * 60; // 6:00 PM
+
+    // Starts before business hours
+    if (startMinutes < openingMinutes) {
+        return "This appointment starts before 9:00 AM. Please select a different time, or consider scheduling this as a project instead.";
+    }
+
+    // Starts at or after closing
+    if (startMinutes >= closingMinutes) {
+        return "This appointment starts at or after 6:00 PM. Please select a different time, or consider scheduling this as a project instead.";
+    }
+
+    // Ends after closing
+    if (endMinutes > closingMinutes) {
+        return "This appointment would extend past 6:00 PM. Please select a different time, or consider scheduling this as a project instead.";
+    }
+
+    // Valid
+    return null;
+}
+
 
 
 function validateAppointmentDateTime(appointmentDate, appointmentTime, now = new Date()) {
@@ -272,6 +340,22 @@ function validateAppointmentDateTime(appointmentDate, appointmentTime, now = new
         }
     }
 
+    return null;
+}
+
+function validateProjectBookingDate(appointmentDate, now = new Date()) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(appointmentDate || ""))) {
+        return "Please select a valid Project start date.";
+    }
+    const selectedTimestamp = localDateTime(appointmentDate, "00:00");
+    if (!Number.isFinite(selectedTimestamp)) {
+        return "Please select a valid Project start date.";
+    }
+    const selectedDate = new Date(selectedTimestamp);
+    const currentDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (selectedDate <= currentDate) {
+        return "A multi-day Project reservation must start on a future date.";
+    }
     return null;
 }
 
@@ -314,7 +398,9 @@ function validateTicketCreation(body) {
         ["supportType", "Support type", 40],
         ["onSiteSupportType", "On-site support type", 20],
         ["appointmentDate", "Appointment date", 10],
-        ["appointmentTime", "Appointment time", 5]
+        ["appointmentTime", "Appointment time", 5],
+        ["appointmentAddress", "Appointment address", 500],
+        ["projectDayMode", "Project day mode", 20]
     ];
 
     for (const [field, label, maxLength] of textFields) {
@@ -341,21 +427,43 @@ function validateTicketCreation(body) {
     }
 
     if (
-        body.appointmentDuration !== undefined &&
-        body.appointmentDuration !== null &&
-        typeof body.appointmentDuration !== "string" &&
-        typeof body.appointmentDuration !== "number"
+        body.supportType.trim() === "On-site Support" &&
+        (!body.appointmentAddress || !body.appointmentAddress.trim())
     ) {
-        return "Appointment duration must be a number.";
+        return "Please provide the on-site appointment address.";
     }
 
     if (
-        body.appointmentDuration !== undefined &&
-        body.appointmentDuration !== null &&
-        String(body.appointmentDuration).trim() !== "" &&
-        !Number.isFinite(Number(body.appointmentDuration))
+        body.supportType.trim() === "On-site Support" &&
+        body.onSiteSupportType === "Project" &&
+        body.projectDayMode !== undefined &&
+        body.projectDayMode !== "" &&
+        !["calendar", "weekdays"].includes(body.projectDayMode)
     ) {
-        return "Appointment duration must be a valid number.";
+        return "Please choose calendar days or weekdays for the Project booking.";
+    }
+
+    for (const [field, label] of [
+        ["appointmentDuration", "Appointment duration"],
+        ["projectDays", "Project days"],
+//        ["projectEstimatedHours", "Project estimated hours"]
+    ]) {
+        if (
+            body[field] !== undefined &&
+            body[field] !== null &&
+            typeof body[field] !== "string" &&
+            typeof body[field] !== "number"
+        ) {
+            return `${label} must be a number.`;
+        }
+        if (
+            body[field] !== undefined &&
+            body[field] !== null &&
+            String(body[field]).trim() !== "" &&
+            !Number.isFinite(Number(body[field]))
+        ) {
+            return `${label} must be a valid number.`;
+        }
     }
 
     return null;
@@ -402,6 +510,7 @@ function validateServiceReport(body) {
     }
 
     const textFields = [
+        ["appointmentId", "Appointment ID", 100],
         ["engineer", "Engineer", 120],
         ["tasksDone", "Tasks done", 5000],
         ["resolution", "Resolution", 5000],
@@ -416,6 +525,10 @@ function validateServiceReport(body) {
         if (validationMessage) {
             return validationMessage;
         }
+    }
+
+    if (body.projectComplete !== undefined && typeof body.projectComplete !== "boolean") {
+        return "Project completion must be a boolean.";
     }
 
     if (
@@ -495,15 +608,33 @@ function validateServiceReport(body) {
 }
 
 function isCreditBillableTicket(ticket) {
+    const isOnSite = String(ticket["Support Type"] || "").trim().toLowerCase() === "on-site support";
+    if (!isOnSite) {
+        return false;
+    }
+    if (String(ticket["On-site Support Type"] || "").trim().toLowerCase() === "project") {
+        return isProjectCreditTicket(ticket);
+    }
+    return true;
+}
+
+function isProjectCreditTicket(ticket) {
     return (
         String(ticket["Support Type"] || "").trim().toLowerCase() === "on-site support" &&
-        String(ticket["On-site Support Type"] || "").trim().toLowerCase() !== "project"
+        String(ticket["On-site Support Type"] || "").trim().toLowerCase() === "project" &&
+        Object.hasOwn(ticket, "Project Estimated Hours") &&
+        Number.isFinite(Number(ticket["Project Estimated Hours"])) &&
+        Number(ticket["Project Estimated Hours"]) > 0
     );
 }
 
 function getTicketEstimatedCredits(ticket) {
     if (!isCreditBillableTicket(ticket)) {
         return 0;
+    }
+
+    if (isProjectCreditTicket(ticket)) {
+        return Number(ticket["Project Estimated Hours"]);
     }
 
     const duration = Number(ticket["Appointment Duration"] || 0);
@@ -658,6 +789,105 @@ function settleTicketCredits(workbook, ticket, billableCredits) {
         unpaidCredits: ticket["Unpaid Credits"],
         remainingCredits: customerCredits
     };
+}
+
+function settleProjectTicketCredits(workbook, ticket, billableCredits, finalized) {
+    const estimatedCredits = getTicketEstimatedCredits(ticket);
+    const storedChargedCredits = ticket["Credits Charged"];
+    const chargedCredits = storedChargedCredits === undefined || storedChargedCredits === ""
+        ? estimatedCredits
+        : Number(storedChargedCredits);
+
+    if (
+        !Number.isFinite(estimatedCredits) ||
+        estimatedCredits <= 0 ||
+        !Number.isFinite(chargedCredits) ||
+        chargedCredits < 0 ||
+        !Number.isFinite(billableCredits) ||
+        billableCredits < 0
+    ) {
+        return { error: "Project credit information is invalid." };
+    }
+
+    const targetCharge = finalized
+        ? billableCredits
+        : Math.max(estimatedCredits, billableCredits);
+    const difference = targetCharge - chargedCredits;
+    let additionalCredits = 0;
+    let refundedCredits = 0;
+    let remainingCredits = null;
+    let actualChargedCredits = chargedCredits;
+
+    if (difference !== 0) {
+        const customerWorksheet = workbook.Sheets.Customer;
+        if (!customerWorksheet) {
+            return { error: "Customer sheet not found; Project credits could not be settled." };
+        }
+        const customersData = XLSX.utils.sheet_to_json(customerWorksheet);
+        const customerIndex = findTicketCustomer(customersData, ticket);
+        if (customerIndex === -1) {
+            return { error: "Customer not found; Project credits could not be settled." };
+        }
+        const customer = customersData[customerIndex];
+        const currentCredits = Number(customer.Credits || 0);
+        if (!Number.isFinite(currentCredits) || currentCredits < 0) {
+            return { error: "Customer credit balance is invalid." };
+        }
+
+        if (difference > 0) {
+            additionalCredits = Math.min(difference, currentCredits);
+            customer.Credits = currentCredits - additionalCredits;
+            actualChargedCredits += additionalCredits;
+        } else {
+            refundedCredits = Math.min(-difference, actualChargedCredits);
+            customer.Credits = currentCredits + refundedCredits;
+            actualChargedCredits -= refundedCredits;
+        }
+        remainingCredits = Number(customer.Credits);
+        workbook.Sheets.Customer = XLSX.utils.json_to_sheet(customersData);
+    }
+
+    const unpaidCredits = Math.max(0, billableCredits - actualChargedCredits);
+    ticket["Credits Charged"] = actualChargedCredits;
+    ticket["Billable Credits"] = billableCredits;
+    ticket["Unpaid Credits"] = unpaidCredits;
+    ticket["Credit Settlement Status"] = finalized ? "Settled" : "Pending";
+
+    return {
+        actualChargedCredits,
+        additionalCredits,
+        refundedCredits,
+        unpaidCredits,
+        remainingCredits,
+        billableCredits,
+        finalized
+    };
+}
+
+function getProjectTicketBillableCredits(reports, ticketId) {
+    return reports
+        .filter(report => String(report["Ticket ID"] || "").trim() === String(ticketId).trim())
+        .reduce((total, report) => {
+            const billableCredits = Number(report["Billable Credits"]);
+            return total + (
+                Number.isFinite(billableCredits) && billableCredits >= 0
+                    ? billableCredits
+                    : calculateBillableServiceReportCredits(
+                        String(report.SignInTime || ""),
+                        String(report.SignOutTime || "")
+                    )
+            );
+        }, 0);
+}
+
+function areProjectAppointmentsFinalized(appointments, ticketId) {
+    const projectAppointments = appointments.filter(appointment =>
+        String(appointment["Ticket ID"] || "").trim() === String(ticketId).trim() &&
+        Number(appointment["Project Days"] || 0) > 0
+    );
+    return projectAppointments.length > 0 && projectAppointments.every(appointment =>
+        ["Completed", "Cancelled"].includes(String(appointment.Status || ""))
+    );
 }
 
 function getServiceReportCreditMessage(ticket, billableCredits, settlement) {
@@ -1143,6 +1373,559 @@ app.get("/api/staff/profile", requireStaffSession, (req, res) => {
     }
 });
 
+app.get("/api/staff/directory", requireStaffSession, (req, res) => {
+    try {
+        const workbook = XLSX.readFile(excelFile);
+        const { roster, changed } = ensureStaffRoster(workbook);
+        const accountStaff = workbook.Sheets.Staff
+            ? XLSX.utils.sheet_to_json(workbook.Sheets.Staff).map(person => ({
+                staffId: String(person["Staff ID"] || ""),
+                name: String(person.Name || ""),
+                email: String(person.Email || "")
+            }))
+            : [];
+        const tickets = workbook.Sheets.Ticket
+            ? XLSX.utils.sheet_to_json(workbook.Sheets.Ticket)
+            : [];
+        const unassignedTickets = tickets
+            .filter(ticket =>
+                String(ticket["Ticket ID"] || "").trim() &&
+                !String(ticket["Assigned Staff ID"] || "").trim() &&
+                !String(ticket["Assigned Engineer"] || "").trim()
+            )
+            .map(ticket => ({
+                ticketId: String(ticket["Ticket ID"] || ""),
+                issue: String(ticket.Issue || ""),
+                status: String(ticket.Status || "")
+            }));
+        const appointments = readAppointments(workbook);
+
+        if (changed) {
+            writeWorkbook(workbook);
+        }
+
+        const staff = roster.map(person => {
+            const staffId = String(person["Staff ID"] || "");
+            return {
+                staffId,
+                name: String(person.Name || ""),
+                role: String(person.Role || ""),
+                department: String(person.Department || ""),
+                email: String(person.Email || ""),
+                phone: String(person.Phone || ""),
+                active: String(person.Active || "Yes").toLowerCase() !== "no",
+                loginStaffId: String(person["Login Staff ID"] || ""),
+                tickets: tickets.filter(ticket =>
+                    String(ticket["Assigned Staff ID"] || "") === staffId ||
+                    (
+                        !ticket["Assigned Staff ID"] &&
+                        String(ticket["Assigned Engineer"] || "") === String(person.Name || "")
+                    )
+                ),
+                appointments: appointments.filter(appointment =>
+                    String(appointment["Staff ID"] || "") === staffId
+                )
+            };
+        });
+
+        return res.json({ staff, loginAccounts: accountStaff, unassignedTickets });
+    } catch (error) {
+        console.error("Get staff directory error:", error);
+        return res.status(500).json({ message: "Unable to load the staff directory." });
+    }
+});
+
+app.post("/api/staff/directory", requireStaffSession, (req, res) => {
+    try {
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        const role = typeof body.role === "string" ? body.role.trim() : "";
+        const department = typeof body.department === "string" ? body.department.trim() : "";
+        const email = typeof body.email === "string" ? body.email.trim() : "";
+        const phone = typeof body.phone === "string" ? body.phone.trim() : "";
+        const loginStaffId = typeof body.loginStaffId === "string" ? body.loginStaffId.trim() : "";
+        const active = body.active !== false;
+        if (!name || name.length > 120 || !role || role.length > 80) {
+            return res.status(400).json({ message: "Name and role are required (maximum 120 and 80 characters)." });
+        }
+        if (department.length > 120 || email.length > 254 || phone.length > 40) {
+            return res.status(400).json({ message: "One or more staff fields exceed their maximum length." });
+        }
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return res.status(400).json({ message: "Please provide a valid staff email address." });
+        }
+
+        const workbook = XLSX.readFile(excelFile);
+        const { roster } = ensureStaffRoster(workbook);
+        const loginAccounts = workbook.Sheets.Staff
+            ? XLSX.utils.sheet_to_json(workbook.Sheets.Staff)
+            : [];
+        if (loginStaffId && !loginAccounts.some(account =>
+            String(account["Staff ID"] || "") === loginStaffId
+        )) {
+            return res.status(400).json({ message: "Choose a valid linked login account." });
+        }
+        if (loginStaffId && roster.some(person =>
+            String(person["Login Staff ID"] || "") === loginStaffId
+        )) {
+            return res.status(409).json({ message: "This login account is already linked to a staff record." });
+        }
+        if (email && roster.some(person => normalizeEmail(person.Email) === normalizeEmail(email))) {
+            return res.status(409).json({ message: "A staff record with this email already exists." });
+        }
+        const record = {
+            "Staff ID": `R-${crypto.randomUUID()}`,
+            Name: name,
+            Role: role,
+            Department: department,
+            Email: email,
+            Phone: phone,
+            Active: active ? "Yes" : "No",
+            "Login Staff ID": loginStaffId
+        };
+        roster.push(record);
+        setWorkbookSheet(workbook, "StaffRoster", XLSX.utils.json_to_sheet(roster, { header: STAFF_ROSTER_COLUMNS }));
+        writeWorkbook(workbook);
+        return res.status(201).json({
+            staff: {
+                staffId: record["Staff ID"], name, role, department, email, phone, active,
+                loginStaffId
+            }
+        });
+    } catch (error) {
+        console.error("Create staff record error:", error);
+        return res.status(500).json({ message: "Unable to create the staff record." });
+    }
+});
+
+app.post("/api/staff/tickets/:ticketId/assignment", requireStaffSession, (req, res) => {
+    try {
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        const staffId = typeof body.staffId === "string" ? body.staffId.trim() : "";
+        if (!staffId) {
+            return res.status(400).json({ message: "Choose a staff member for this ticket." });
+        }
+
+        const workbook = XLSX.readFile(excelFile);
+        const ticketSheet = workbook.Sheets.Ticket;
+        if (!ticketSheet) {
+            return res.status(404).json({ message: "Ticket sheet not found." });
+        }
+        const tickets = XLSX.utils.sheet_to_json(ticketSheet);
+        const ticket = tickets.find(row =>
+            String(row["Ticket ID"] || "") === req.params.ticketId
+        );
+        if (!ticket) {
+            return res.status(404).json({ message: "Ticket not found." });
+        }
+        if (
+            String(ticket["Assigned Staff ID"] || "").trim() ||
+            String(ticket["Assigned Engineer"] || "").trim()
+        ) {
+            return res.status(409).json({ message: "This ticket is already assigned." });
+        }
+
+        const { roster } = ensureStaffRoster(workbook);
+        const selected = roster.find(person =>
+            String(person["Staff ID"] || "") === staffId
+        );
+        if (!selected || String(selected.Active || "Yes").toLowerCase() === "no") {
+            return res.status(400).json({ message: "Choose an active staff member." });
+        }
+
+        ticket["Assigned Staff ID"] = staffId;
+        ticket["Assigned Engineer"] = String(selected.Name || "");
+        setWorkbookSheet(workbook, "StaffRoster", XLSX.utils.json_to_sheet(roster, { header: STAFF_ROSTER_COLUMNS }));
+        setWorkbookSheet(workbook, "Ticket", XLSX.utils.json_to_sheet(tickets));
+        writeWorkbook(workbook, () => {
+            const latestWorkbook = XLSX.readFile(excelFile);
+            const latestTicketSheet = latestWorkbook.Sheets.Ticket;
+            const latestTickets = latestTicketSheet
+                ? XLSX.utils.sheet_to_json(latestTicketSheet)
+                : [];
+            const latestTicket = latestTickets.find(row =>
+                String(row["Ticket ID"] || "") === req.params.ticketId
+            );
+            if (!latestTicket) {
+                const error = new Error("Ticket not found.");
+                error.code = "TICKET_NOT_FOUND";
+                throw error;
+            }
+            if (
+                String(latestTicket["Assigned Staff ID"] || "").trim() ||
+                String(latestTicket["Assigned Engineer"] || "").trim()
+            ) {
+                const error = new Error("This ticket is already assigned.");
+                error.code = "TICKET_ALREADY_ASSIGNED";
+                throw error;
+            }
+            const latestRoster = ensureStaffRoster(latestWorkbook).roster;
+            const latestSelected = latestRoster.find(person =>
+                String(person["Staff ID"] || "") === staffId
+            );
+            if (!latestSelected || String(latestSelected.Active || "Yes").toLowerCase() === "no") {
+                const error = new Error("Choose an active staff member.");
+                error.code = "INVALID_ASSIGNMENT_STAFF";
+                throw error;
+            }
+            latestTicket["Assigned Staff ID"] = staffId;
+            latestTicket["Assigned Engineer"] = String(latestSelected.Name || "");
+            setWorkbookSheet(
+                workbook,
+                "StaffRoster",
+                XLSX.utils.json_to_sheet(latestRoster, { header: STAFF_ROSTER_COLUMNS })
+            );
+            setWorkbookSheet(workbook, "Ticket", XLSX.utils.json_to_sheet(latestTickets));
+        });
+        return res.json({ ticketId: req.params.ticketId, staffId });
+    } catch (error) {
+        if (error && error.code === "DATABASE_LOCKED") {
+            return res.status(409).json({ message: error.message });
+        }
+        if (error && error.code === "TICKET_NOT_FOUND") {
+            return res.status(404).json({ message: error.message });
+        }
+        if (error && error.code === "TICKET_ALREADY_ASSIGNED") {
+            return res.status(409).json({ message: error.message });
+        }
+        if (error && error.code === "INVALID_ASSIGNMENT_STAFF") {
+            return res.status(400).json({ message: error.message });
+        }
+        console.error("Assign ticket to staff error:", error);
+        return res.status(500).json({ message: "Unable to assign the ticket." });
+    }
+});
+
+app.patch("/api/staff/directory/:staffId", requireStaffSession, (req, res) => {
+    try {
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        const workbook = XLSX.readFile(excelFile);
+        const { roster } = ensureStaffRoster(workbook);
+        const index = roster.findIndex(person =>
+            String(person["Staff ID"] || "") === req.params.staffId
+        );
+        if (index === -1) {
+            return res.status(404).json({ message: "Staff record not found." });
+        }
+
+        const updates = [
+            ["name", "Name", 120],
+            ["role", "Role", 80],
+            ["department", "Department", 120],
+            ["email", "Email", 254],
+            ["phone", "Phone", 40]
+        ];
+        for (const [field, column, maxLength] of updates) {
+            if (body[field] === undefined) {
+                continue;
+            }
+            if (body.loginStaffId !== undefined) {
+                if (typeof body.loginStaffId !== "string") {
+                    return res.status(400).json({ message: "Linked login account must be an account ID or empty." });
+                }
+                const loginStaffId = body.loginStaffId.trim();
+                const accounts = workbook.Sheets.Staff
+                    ? XLSX.utils.sheet_to_json(workbook.Sheets.Staff)
+                    : [];
+                if (loginStaffId && !accounts.some(account =>
+                    String(account["Staff ID"] || "") === loginStaffId
+                )) {
+                    return res.status(400).json({ message: "Choose a valid linked login account." });
+                }
+                if (loginStaffId && roster.some((person, row) =>
+                    row !== index && String(person["Login Staff ID"] || "") === loginStaffId
+                )) {
+                    return res.status(409).json({ message: "This login account is already linked to a staff record." });
+                }
+                roster[index]["Login Staff ID"] = loginStaffId;
+            }
+            if (typeof body[field] !== "string" || body[field].trim().length > maxLength) {
+                return res.status(400).json({ message: `${field} must be text with at most ${maxLength} characters.` });
+            }
+            roster[index][column] = body[field].trim();
+        }
+        if (body.active !== undefined) {
+            if (typeof body.active !== "boolean") {
+                return res.status(400).json({ message: "Active status must be a boolean." });
+            }
+            roster[index].Active = body.active ? "Yes" : "No";
+        }
+        const email = normalizeEmail(roster[index].Email);
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return res.status(400).json({ message: "Please provide a valid staff email address." });
+        }
+        if (email && roster.some((person, row) =>
+            row !== index && normalizeEmail(person.Email) === email
+        )) {
+            return res.status(409).json({ message: "A staff record with this email already exists." });
+        }
+        if (!String(roster[index].Name || "").trim() || !String(roster[index].Role || "").trim()) {
+            return res.status(400).json({ message: "Name and role are required." });
+        }
+
+        setWorkbookSheet(workbook, "StaffRoster", XLSX.utils.json_to_sheet(roster, { header: STAFF_ROSTER_COLUMNS }));
+        writeWorkbook(workbook);
+        return res.json({
+            staff: {
+                staffId: String(roster[index]["Staff ID"]),
+                name: String(roster[index].Name || ""),
+                role: String(roster[index].Role || ""),
+                department: String(roster[index].Department || ""),
+                email: String(roster[index].Email || ""),
+                phone: String(roster[index].Phone || ""),
+                active: String(roster[index].Active).toLowerCase() !== "no",
+                loginStaffId: String(roster[index]["Login Staff ID"] || "")
+            }
+        });
+    } catch (error) {
+        console.error("Update staff record error:", error);
+        return res.status(500).json({ message: "Unable to update the staff record." });
+    }
+});
+
+app.get("/api/staff/appointments", requireStaffSession, (req, res) => {
+    try {
+        const workbook = XLSX.readFile(excelFile);
+        ensureStaffRoster(workbook);
+        return res.json(readAppointments(workbook));
+    } catch (error) {
+        console.error("Get appointment schedule error:", error);
+        return res.status(500).json({ message: "Unable to load appointments." });
+    }
+});
+
+app.get("/api/staff/appointments/:appointmentId/available-staff", requireStaffSession, (req, res) => {
+    try {
+        const workbook = XLSX.readFile(excelFile);
+        const { roster } = ensureStaffRoster(workbook);
+        const appointments = readAppointments(workbook);
+        const appointment = appointments.find(record =>
+            String(record["Appointment ID"] || "") === req.params.appointmentId
+        );
+        if (!appointment) {
+            return res.status(404).json({ message: "Appointment not found." });
+        }
+
+        const otherAppointments = appointments.filter(record =>
+            String(record["Appointment ID"] || "") !== req.params.appointmentId
+        );
+        const availableStaff = roster
+            .filter(person =>
+                String(person.Active || "Yes").toLowerCase() !== "no" &&
+                getStaffRoleEligibility(person) &&
+                !hasSchedulingConflict(
+                    { ...appointment, "Staff ID": String(person["Staff ID"] || "") },
+                    otherAppointments
+                )
+            )
+            .map(person => ({
+                staffId: String(person["Staff ID"] || ""),
+                name: String(person.Name || ""),
+                role: String(person.Role || "")
+            }));
+        return res.json(availableStaff);
+    } catch (error) {
+        console.error("Get available appointment staff error:", error);
+        return res.status(500).json({ message: "Unable to load available staff for this appointment." });
+    }
+});
+
+app.patch("/api/staff/appointments/:appointmentId", requireStaffSession, (req, res) => {
+    try {
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        const workbook = XLSX.readFile(excelFile);
+        const { roster } = ensureStaffRoster(workbook);
+        const appointments = readAppointments(workbook);
+        const appointmentIndex = appointments.findIndex(appointment =>
+            String(appointment["Appointment ID"] || "") === req.params.appointmentId
+        );
+        if (appointmentIndex === -1) {
+            return res.status(404).json({ message: "Appointment not found." });
+        }
+
+        const appointment = appointments[appointmentIndex];
+        if (body.status !== undefined) {
+            if (!["Pending", "Confirmed", "Reschedule Required", "Cancelled"].includes(body.status)) {
+                return res.status(400).json({ message: "Please select a valid appointment status." });
+            }
+            appointment.Status = body.status;
+        }
+        if (body.staffId !== undefined) {
+            if (typeof body.staffId !== "string") {
+                return res.status(400).json({ message: "Choose an active technician eligible for appointments." });
+            }
+            const staffId = body.staffId.trim();
+            if (!staffId) {
+                appointment["Staff ID"] = "";
+                appointment.Status = "Reschedule Required";
+                appointment["Scheduling Note"] = "No technician is assigned. Scheduling follow-up is required.";
+            } else {
+                const selected = roster.find(person =>
+                    String(person["Staff ID"] || "") === staffId
+                );
+                if (!selected || String(selected.Active || "Yes").toLowerCase() === "no" || !getStaffRoleEligibility(selected)) {
+                    return res.status(400).json({ message: "Choose an active technician eligible for appointments." });
+                }
+                const candidate = { ...appointment, "Staff ID": String(selected["Staff ID"]) };
+                if (hasSchedulingConflict(candidate, appointments.filter((_, index) => index !== appointmentIndex))) {
+                    return res.status(409).json({ message: "This technician is unavailable at the requested time or travel buffer." });
+                }
+                appointment["Staff ID"] = String(selected["Staff ID"]);
+                appointment.Status = "Pending";
+                appointment["Scheduling Note"] = "";
+            }
+        }
+
+        if (body.date !== undefined || body.time !== undefined || body.durationHours !== undefined) {
+            if (Number(appointment["Project Days"] || 0) > 0) {
+                return res.status(400).json({ message: "Project dates must be changed as a project booking." });
+            }
+            const date = body.date === undefined ? String(appointment["Start Date"]) : String(body.date);
+            const time = body.time === undefined ? String(appointment["Start Time"]) : String(body.time);
+            const dateValidation = validateAppointmentDateTime(date, time);
+            if (dateValidation) {
+                return res.status(400).json({ message: dateValidation });
+            }
+            const durationHours = body.durationHours === undefined
+                ? (localDateTime(appointment["End Date"], appointment["End Time"]) -
+                    localDateTime(appointment["Start Date"], appointment["Start Time"])) / 3600000
+                : Number(body.durationHours);
+            const businessHoursError = validateAppointmentBusinessHours(
+                time,
+                durationHours
+            );
+            if (businessHoursError) {
+                return res.status(400).json({ message: businessHoursError });
+            }
+            const interval = getAppointmentCandidate({
+                date, time, durationHours,
+                address: appointment.Address,
+                ticketId: appointment["Ticket ID"]
+            });
+            if (!interval) {
+                return res.status(400).json({ message: "Provide a valid date, time, and positive duration." });
+            }
+            const candidate = {
+                ...appointment,
+                "Start Date": interval["Start Date"],
+                "Start Time": interval["Start Time"],
+                "End Date": interval["End Date"],
+                "End Time": interval["End Time"]
+            };
+            if (
+                appointment["Staff ID"] &&
+                hasSchedulingConflict(candidate, appointments.filter((_, index) => index !== appointmentIndex))
+            ) {
+                return res.status(409).json({ message: "This technician is unavailable at the requested time or travel buffer." });
+            }
+            Object.assign(appointment, candidate);
+        }
+
+        if (
+            Number(appointment["Project Days"] || 0) > 0 &&
+            (body.projectDays !== undefined || body.projectDayMode !== undefined || body.date !== undefined)
+        ) {
+            let recordedSessions;
+            try {
+                recordedSessions = JSON.parse(String(appointment["Service Sessions"] || "[]"));
+            } catch (error) {
+                throw new Error("Stored Project service sessions are invalid.", { cause: error });
+            }
+            if (!Array.isArray(recordedSessions)) {
+                throw new Error("Stored Project service sessions must be a list.");
+            }
+            if (recordedSessions.length > 0) {
+                return res.status(409).json({ message: "A Project booking cannot be moved after service sessions have been recorded." });
+            }
+            const projectDays = body.projectDays === undefined
+                ? Number(appointment["Project Days"])
+                : Number(body.projectDays);
+            const projectDayMode = body.projectDayMode === undefined
+                ? String(appointment["Project Day Mode"] || "calendar")
+                : String(body.projectDayMode);
+            const date = body.date === undefined
+                ? String(appointment["Start Date"])
+                : String(body.date);
+            const dateValidation = validateProjectBookingDate(date);
+            if (!Number.isInteger(projectDays) || projectDays < 1 || !["calendar", "weekdays"].includes(projectDayMode) || dateValidation) {
+                return res.status(400).json({ message: "Provide a valid project start date, day count, and reservation mode." });
+            }
+            const projectCandidate = getAppointmentCandidate({
+                date,
+                time: "00:00",
+                projectDays,
+                projectDayMode,
+                address: appointment.Address,
+                ticketId: appointment["Ticket ID"]
+            });
+            const updatedProject = {
+                ...appointment,
+                "Start Date": projectCandidate["Start Date"],
+                "Start Time": projectCandidate["Start Time"],
+                "End Date": projectCandidate["End Date"],
+                "End Time": projectCandidate["End Time"],
+                "Project Days": projectDays,
+                "Project Day Mode": projectDayMode
+            };
+            if (
+                appointment["Staff ID"] &&
+                hasSchedulingConflict(updatedProject, appointments.filter((_, index) => index !== appointmentIndex))
+            ) {
+                return res.status(409).json({ message: "This technician is unavailable during the selected project reservation." });
+            }
+            Object.assign(appointment, updatedProject);
+        }
+
+        const ticketSheet = workbook.Sheets.Ticket;
+        const tickets = ticketSheet ? XLSX.utils.sheet_to_json(ticketSheet) : [];
+        const ticket = tickets.find(row =>
+            String(row["Ticket ID"] || "") === String(appointment["Ticket ID"] || "")
+        );
+        if (ticket) {
+            ticket["Appointment Date"] = appointment["Start Date"];
+            ticket["Appointment Time"] = appointment["Start Time"];
+            ticket["Appointment Address"] = appointment.Address;
+            ticket["Appointment Status"] = appointment.Status;
+            if (Number(appointment["Project Days"] || 0) > 0) {
+                ticket["Appointment Duration"] = Number(appointment["Project Days"]);
+            } else {
+                ticket["Appointment Duration"] =
+                    (localDateTime(appointment["End Date"], appointment["End Time"]) -
+                    localDateTime(appointment["Start Date"], appointment["Start Time"])) / 3600000;
+            }
+            const assignee = roster.find(person =>
+                String(person["Staff ID"] || "") === String(appointment["Staff ID"] || "")
+            );
+            ticket["Visit Technician"] = assignee ? String(assignee.Name || "") : "";
+            if (
+                isProjectCreditTicket(ticket) &&
+                areProjectAppointmentsFinalized(appointments, ticket["Ticket ID"])
+            ) {
+                const reports = workbook.Sheets.ServiceReport
+                    ? XLSX.utils.sheet_to_json(workbook.Sheets.ServiceReport)
+                    : [];
+                const settlement = settleProjectTicketCredits(
+                    workbook,
+                    ticket,
+                    getProjectTicketBillableCredits(reports, ticket["Ticket ID"]),
+                    true
+                );
+                if (settlement.error) {
+                    return res.status(500).json({ message: settlement.error });
+                }
+            }
+            workbook.Sheets.Ticket = XLSX.utils.json_to_sheet(tickets);
+        }
+
+        saveAppointments(workbook, appointments);
+        writeWorkbook(workbook);
+        return res.json({ appointment });
+    } catch (error) {
+        console.error("Update appointment error:", error);
+        return res.status(500).json({ message: "Unable to update the appointment." });
+    }
+});
+
 app.get("/api/staff/customers", requireStaffSession, (req, res) => {
     try {
         const workbook = XLSX.readFile(excelFile);
@@ -1417,6 +2200,8 @@ app.post("/api/tickets", (req, res) => {
         let appointmentDuration = null;
         let originalAppointmentDuration = null;
         let roundedDurationNotice = null;
+        let projectEstimatedHours = null;
+        let projectDays = null;
         const onSiteSupportType =
             String(
                 req.body.onSiteSupportType || ""
@@ -1438,10 +2223,9 @@ app.post("/api/tickets", (req, res) => {
 
             const appointmentDate = String(req.body.appointmentDate || "").trim();
             const appointmentTime = String(req.body.appointmentTime || "").trim();
-            const appointmentValidationMessage = validateAppointmentDateTime(
-                appointmentDate,
-                appointmentTime
-            );
+            const appointmentValidationMessage = onSiteSupportType === "Project"
+                ? validateProjectBookingDate(appointmentDate)
+                : validateAppointmentDateTime(appointmentDate, appointmentTime);
 
             if (appointmentValidationMessage) {
                 return res.status(400).json({
@@ -1449,6 +2233,7 @@ app.post("/api/tickets", (req, res) => {
                 });
             }
 
+            const WORK_HOURS_PER_DAY = 8;
             let minimumHours = 0;
 
             if (onSiteSupportType === "Maintenance") {
@@ -1466,30 +2251,38 @@ app.post("/api/tickets", (req, res) => {
                 });
             }
 
-            originalAppointmentDuration =
-                parseFloat(
-                    req.body.appointmentDuration
-                );
-
-            appointmentDuration = originalAppointmentDuration;
-
-
-            /* =========================
-               CHECK DURATION
-            ========================= */
-
             if (onSiteSupportType === "Project") {
-                if (
-                    !Number.isFinite(appointmentDuration) ||
-                    !Number.isInteger(appointmentDuration) ||
-                    appointmentDuration < 1
-                ) {
+//                const rawEstimatedHours = Number(req.body.projectEstimatedHours);
+                projectDays = Number(req.body.projectDays);
+//                originalAppointmentDuration = rawEstimatedHours;
+//                projectEstimatedHours = rawEstimatedHours;
+//                appointmentDuration = projectDays;
+//                if (
+//                    !Number.isFinite(rawEstimatedHours) ||
+//                    rawEstimatedHours <= 0 ||
+//                    !Number.isFinite(projectEstimatedHours) ||
+//                    projectEstimatedHours <= 0
+//                ) {
+//                    return res.status(400).json({
+//                        message: "Project estimated work hours must be a positive number."
+//                    });
+//                }
+//                if (!Number.isInteger(rawEstimatedHours * 2)) {
+//                    return res.status(400).json({
+//                        message: "Project estimated work hours must be in 0.5-hour increments."
+//                    });
+//                }
+                if (!Number.isInteger(projectDays) || projectDays < 1) {
                     return res.status(400).json({
-                        message:
-                            "Project duration is required and must be a whole number of days (minimum 1 day)."
+                        message: "Estimated Project days must be a whole number (minimum 1 day)."
                     });
                 }
+                projectEstimatedHours = projectDays * WORK_HOURS_PER_DAY;
+                originalAppointmentDuration = projectEstimatedHours;
+                appointmentDuration = projectDays;
             } else {
+                originalAppointmentDuration = parseFloat(req.body.appointmentDuration);
+                appointmentDuration = originalAppointmentDuration;
                 if (
                     !Number.isFinite(
                         appointmentDuration
@@ -1546,6 +2339,11 @@ app.post("/api/tickets", (req, res) => {
 
         }
 
+        const estimatedCreditsForRequest = isOnSiteSupportRequest
+            ? onSiteSupportType === "Project"
+                ? projectEstimatedHours
+                : appointmentDuration
+            : 0;
 
         /* =========================
            CHECK CREDITS
@@ -1554,9 +2352,8 @@ app.post("/api/tickets", (req, res) => {
         if (
             customer &&
             isOnSiteSupportRequest &&
-            onSiteSupportType !== "Project" &&
             currentCredits <
-            appointmentDuration
+            estimatedCreditsForRequest
         ) {
 
             return res.status(400).json({
@@ -1565,7 +2362,7 @@ app.post("/api/tickets", (req, res) => {
                     "The customer only has " +
                     currentCredits +
                     " credit(s), but requested " +
-                    appointmentDuration +
+                    estimatedCreditsForRequest +
                     " hour(s)."
 
             });
@@ -1584,12 +2381,12 @@ app.post("/api/tickets", (req, res) => {
         if (
             customer &&
             isOnSiteSupportRequest &&
-            onSiteSupportType !== "Project"
+            estimatedCreditsForRequest > 0
         ) {
 
             remainingCredits =
                 currentCredits -
-                appointmentDuration;
+                estimatedCreditsForRequest;
 
 
             customersData[customerIndex]["Credits"] =
@@ -1682,14 +2479,26 @@ app.post("/api/tickets", (req, res) => {
             "Appointment Duration":
                 appointmentDuration,
 
+            "Project Estimated Hours":
+                isOnSiteSupportRequest && onSiteSupportType === "Project"
+                    ? projectEstimatedHours
+                    : "",
+
+            "Appointment Address":
+                isOnSiteSupportRequest
+                    ? String(req.body.appointmentAddress || "").trim()
+                    : "",
+
             "Credits Charged":
-                isOnSiteSupportRequest && onSiteSupportType !== "Project"
-                    ? appointmentDuration
+                estimatedCreditsForRequest > 0
+                    ? estimatedCreditsForRequest
                     : 0,
 
             "Billable Credits":
-                isOnSiteSupportRequest && onSiteSupportType !== "Project"
-                    ? appointmentDuration
+                isOnSiteSupportRequest && onSiteSupportType === "Project"
+                    ? 0
+                    : estimatedCreditsForRequest > 0
+                        ? estimatedCreditsForRequest
                     : 0,
 
             "Unpaid Credits":
@@ -1697,11 +2506,11 @@ app.post("/api/tickets", (req, res) => {
 
             "Credit Settlement Status":
                 isOnSiteSupportRequest
-                    ? onSiteSupportType === "Project" ? "Exempt" : "Pending"
+                    ? "Pending"
                     : "Not Applicable",
 
             "Appointment Status":
-                "Pending",
+                isOnSiteSupportRequest ? "Reschedule Required" : "Pending",
 
             "Created Date":
                 new Date().toISOString(),
@@ -1711,6 +2520,51 @@ app.post("/api/tickets", (req, res) => {
 
         };
 
+        let assignedTechnician = null;
+        let createdAppointment = null;
+        let appointmentCandidate = null;
+        if (isOnSiteSupportRequest) {
+            const { roster } = ensureStaffRoster(workbook);
+            const appointments = readAppointments(workbook);
+            appointmentCandidate = getAppointmentCandidate({
+                date: String(req.body.appointmentDate || "").trim(),
+                time: onSiteSupportType === "Project"
+                    ? "00:00"
+                    : String(req.body.appointmentTime || "").trim(),
+                durationHours: onSiteSupportType === "Project" ? null : appointmentDuration,
+                projectDays: onSiteSupportType === "Project" ? projectDays : 0,
+                projectDayMode: String(req.body.projectDayMode || "calendar").trim(),
+                address: String(req.body.appointmentAddress || "").trim(),
+                ticketId: ticket["Ticket ID"]
+            });
+
+            if (!appointmentCandidate) {
+                return res.status(400).json({
+                    message: "The requested appointment schedule is invalid."
+                });
+            }
+
+            assignedTechnician = chooseTechnician(
+                roster.filter(getStaffRoleEligibility),
+                appointments,
+                appointmentCandidate,
+                ["Technician", "Engineer", "IT Support Staff"]
+            );
+            createdAppointment = buildAppointmentRecord(
+                appointmentCandidate,
+                `A-${crypto.randomUUID()}`,
+                assignedTechnician ? String(assignedTechnician["Staff ID"]) : "",
+                assignedTechnician
+                    ? ""
+                    : "No eligible technician is available for this requested time. Scheduling follow-up is required."
+            );
+            appointments.push(createdAppointment);
+            saveAppointments(workbook, appointments);
+            ticket["Appointment Status"] = createdAppointment.Status;
+            if (assignedTechnician) {
+                ticket["Visit Technician"] = String(assignedTechnician.Name || "");
+            }
+        }
 
         /* =========================
            ADD TICKET
@@ -1733,7 +2587,39 @@ app.post("/api/tickets", (req, res) => {
            SAVE EXCEL FILE
         ========================= */
 
-        writeWorkbook(workbook);
+        if (createdAppointment) {
+            writeWorkbook(workbook, () => {
+                const latestWorkbook = XLSX.readFile(excelFile);
+                const latestRoster = ensureStaffRoster(latestWorkbook).roster;
+                const latestAppointments = readAppointments(latestWorkbook);
+                assignedTechnician = chooseTechnician(
+                    latestRoster.filter(getStaffRoleEligibility),
+                    latestAppointments,
+                    appointmentCandidate,
+                    ["Technician", "Engineer", "IT Support Staff"]
+                );
+                createdAppointment["Staff ID"] = assignedTechnician
+                    ? String(assignedTechnician["Staff ID"])
+                    : "";
+                createdAppointment.Status = assignedTechnician ? "Pending" : "Reschedule Required";
+                createdAppointment["Scheduling Note"] = assignedTechnician
+                    ? ""
+                    : "No eligible technician is available for this requested time. Scheduling follow-up is required.";
+                const latestRosterSheet = XLSX.utils.json_to_sheet(
+                    latestRoster,
+                    { header: STAFF_ROSTER_COLUMNS }
+                );
+                setWorkbookSheet(workbook, "StaffRoster", latestRosterSheet);
+                saveAppointments(workbook, latestAppointments.concat(createdAppointment));
+                ticket["Appointment Status"] = createdAppointment.Status;
+                ticket["Visit Technician"] = assignedTechnician
+                    ? String(assignedTechnician.Name || "")
+                    : "";
+                workbook.Sheets["Ticket"] = XLSX.utils.json_to_sheet(ticketsData);
+            });
+        } else {
+            writeWorkbook(workbook);
+        }
 
         console.log(
             "New ticket saved to Excel:",
@@ -1772,11 +2658,25 @@ app.post("/api/tickets", (req, res) => {
                 appointmentDuration,
 
             roundUpApplied:
-                !!roundedDurationNotice
+                !!roundedDurationNotice,
+
+            technician:
+                assignedTechnician
+                    ? String(assignedTechnician.Name || "")
+                    : null,
+
+            appointmentStatus:
+                createdAppointment ? createdAppointment.Status : null,
+
+            schedulingNote:
+                createdAppointment ? createdAppointment["Scheduling Note"] : null
 
         });
 
     } catch (error) {
+        if (error && error.code === "DATABASE_LOCKED") {
+            return res.status(409).json({ message: error.message });
+        }
 
         console.error(
             "Create ticket error:",
@@ -2109,10 +3009,19 @@ app.put(
                UPDATE TICKET
             ========================= */
 
+            const currentRoster = ensureStaffRoster(workbook).roster;
+            const assignedEngineerName = String(req.body.assignedEngineer || "").trim();
+            const assignedStaffRecord = currentRoster.find(person =>
+                String(person.Name || "").trim() === assignedEngineerName &&
+                String(person.Active || "Yes").toLowerCase() !== "no"
+            );
+
             ticketsData[ticketIndex][
                 "Assigned Engineer"
             ] =
-                req.body.assignedEngineer || "";
+                assignedEngineerName;
+            ticketsData[ticketIndex]["Assigned Staff ID"] =
+                assignedStaffRecord ? String(assignedStaffRecord["Staff ID"] || "") : "";
 
 
             ticketsData[ticketIndex][
@@ -2268,8 +3177,25 @@ app.delete(
             ).trim();
             const shouldRefundEstimate =
                 isCreditBillableTicket(ticketToDelete) &&
+                !isProjectCreditTicket(ticketToDelete) &&
                 !hasServiceReport &&
                 settlementStatus !== "Settled";
+
+            if (isProjectCreditTicket(ticketToDelete)) {
+                const projectSettlement = settleProjectTicketCredits(
+                    workbook,
+                    ticketToDelete,
+                    getProjectTicketBillableCredits(ticketReports, ticketId),
+                    true
+                );
+                if (projectSettlement.error) {
+                    return res.status(500).json({
+                        message: `${projectSettlement.error} Unable to delete ticket.`
+                    });
+                }
+                refundedCredits = projectSettlement.refundedCredits;
+                refundApplied = refundedCredits > 0;
+            }
 
             if (shouldRefundEstimate) {
                 const estimatedCredits = Number(
@@ -2381,7 +3307,7 @@ app.delete(
    GET STAFF
 ========================================================= */
 
-app.get("/api/staff", (req, res) => {
+app.get("/api/staff", requireStaffSession, (req, res) => {
 
     try {
 
@@ -2390,76 +3316,24 @@ app.get("/api/staff", (req, res) => {
                 excelFile
             );
 
-
-        const worksheet =
-            workbook.Sheets["Staff"];
-
-
-        if (!worksheet) {
-
-            return res.status(404).json({
-
-                message:
-                    "Staff sheet not found."
-
-            });
-
+        const { roster, changed } = ensureStaffRoster(workbook);
+        const staffList = roster
+            .filter(staff =>
+                String(staff.Active || "Yes").toLowerCase() !== "no" &&
+                getStaffRoleEligibility(staff)
+            )
+            .map(staff => ({
+                staffId: staff["Staff ID"],
+                name: staff.Name,
+                email: staff.Email,
+                role: staff.Role,
+                department: staff.Department
+            }));
+        if (changed) {
+            writeWorkbook(workbook);
         }
 
-
-        const staffData =
-            XLSX.utils.sheet_to_json(
-                worksheet
-            );
-
-
-        /*
-           ONLY RETURN STAFF WHO CAN
-           BE ASSIGNED AS ENGINEERS.
-        */
-
-        /*
-           Future-ready hook for technician-only filtering.
-           Do not enable until a real technician role exists in the staff data.
-        */
-        const staffList =
-            staffData
-                .filter(
-                    staff =>
-                        String(
-                            staff.Role || ""
-                        ).trim() ===
-                            "IT Support Staff" ||
-                        String(
-                            staff.Role || ""
-                        ).trim() ===
-                            "Engineer"
-                )
-                .map(
-                    staff => ({
-
-                        staffId:
-                            staff["Staff ID"],
-
-                        name:
-                            staff.Name,
-
-                        email:
-                            staff.Email,
-
-                        role:
-                            staff.Role,
-
-                        department:
-                            staff.Department
-
-                    })
-                );
-
-
-        res.json(
-            staffList
-        );
+        res.json(staffList);
 
     } catch (error) {
 
@@ -2569,9 +3443,545 @@ function setWorkbookSheet(workbook, sheetName, worksheet) {
         workbook.Sheets[sheetName] = worksheet;
         return;
     }
-
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
 }
+
+const STAFF_ROSTER_COLUMNS = [
+        "Staff ID",
+        "Name",
+        "Role",
+        "Department",
+        "Email",
+        "Phone",
+        "Active",
+        "Login Staff ID"
+    ];
+const APPOINTMENT_COLUMNS = [
+        "Appointment ID",
+        "Ticket ID",
+        "Staff ID",
+        "Start Date",
+        "Start Time",
+        "End Date",
+        "End Time",
+        "Actual Start Date",
+        "Actual Start Time",
+        "Actual End Date",
+        "Actual End Time",
+        "Project Days",
+        "Project Day Mode",
+        "Service Sessions",
+        "Project Complete",
+        "Address",
+        "Status",
+        "Scheduling Note",
+        "Service Report ID",
+        "Created At"
+    ];
+
+function ensureStaffRoster(workbook) {
+        let roster = workbook.Sheets.StaffRoster
+            ? XLSX.utils.sheet_to_json(workbook.Sheets.StaffRoster)
+            : [];
+        const accountStaff = workbook.Sheets.Staff
+            ? XLSX.utils.sheet_to_json(workbook.Sheets.Staff)
+            : [];
+        let changed = !workbook.Sheets.StaffRoster;
+
+        accountStaff.forEach(account => {
+            const loginId = String(account["Staff ID"] || "").trim();
+            const email = normalizeEmail(account.Email);
+            const matchingRosterRecord = roster.find(person =>
+                (loginId && String(person["Login Staff ID"] || "") === loginId) ||
+                (email && normalizeEmail(person.Email) === email)
+            );
+            if (matchingRosterRecord) {
+                if (loginId && !String(matchingRosterRecord["Login Staff ID"] || "")) {
+                    matchingRosterRecord["Login Staff ID"] = loginId;
+                    changed = true;
+                }
+                return;
+            }
+
+            roster.push({
+                "Staff ID": loginId || `R-${crypto.randomUUID()}`,
+                Name: String(account.Name || "").trim(),
+                Role: String(account.Role || "").trim(),
+                Department: String(account.Department || "").trim(),
+                Email: String(account.Email || "").trim(),
+                Phone: String(account.Phone || "").trim(),
+                Active: "Yes",
+                "Login Staff ID": loginId
+            });
+            changed = true;
+        });
+
+        if (changed) {
+            setWorkbookSheet(
+                workbook,
+                "StaffRoster",
+                XLSX.utils.json_to_sheet(roster, { header: STAFF_ROSTER_COLUMNS })
+            );
+        }
+        return { roster, changed };
+}
+
+function readAppointments(workbook) {
+        if (!workbook.Sheets.Appointment) {
+            return [];
+        }
+        return XLSX.utils.sheet_to_json(workbook.Sheets.Appointment);
+}
+
+function saveAppointments(workbook, appointments) {
+        setWorkbookSheet(
+            workbook,
+            "Appointment",
+            XLSX.utils.json_to_sheet(appointments, { header: APPOINTMENT_COLUMNS })
+        );
+}
+
+function getStaffRoleEligibility(staff) {
+        return ["technician", "engineer", "it support staff"].includes(
+            String(staff.Role || "").trim().toLowerCase()
+        );
+}
+
+function buildAppointmentRecord(candidate, appointmentId, staffId, schedulingNote = "") {
+        return {
+            "Appointment ID": appointmentId,
+            "Ticket ID": candidate["Ticket ID"],
+            "Staff ID": staffId || "",
+            "Start Date": candidate["Start Date"],
+            "Start Time": candidate["Start Time"],
+            "End Date": candidate["End Date"],
+            "End Time": candidate["End Time"],
+            "Actual Start Date": "",
+            "Actual Start Time": "",
+            "Actual End Date": "",
+            "Actual End Time": "",
+            "Project Days": candidate["Project Days"] || 0,
+            "Project Day Mode": candidate["Project Day Mode"] || "",
+            "Service Sessions": "[]",
+            "Project Complete": "No",
+            Address: candidate.Address,
+            Status: staffId ? "Pending" : "Reschedule Required",
+            "Scheduling Note": schedulingNote,
+            "Service Report ID": "",
+            "Created At": new Date().toISOString()
+        };
+}
+
+function getActualSessionFromReport(report) {
+        const date = String(report.Date || "");
+        const signInTime = String(report.SignInTime || "");
+        const signOutTime = String(report.SignOutTime || "");
+        const start = localDateTime(date, signInTime);
+        let end = localDateTime(date, signOutTime);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
+            return null;
+        }
+        if (end <= start) {
+            end += 24 * 60 * 60 * 1000;
+        }
+        const endDate = new Date(end);
+        return {
+            date,
+            signInTime,
+            endDate: [
+                endDate.getFullYear(),
+                String(endDate.getMonth() + 1).padStart(2, "0"),
+                String(endDate.getDate()).padStart(2, "0")
+            ].join("-"),
+            signOutTime: `${String(endDate.getHours()).padStart(2, "0")}:${String(endDate.getMinutes()).padStart(2, "0")}`,
+            reportId: String(report["Report ID"] || ""),
+            projectComplete: report["Project Complete"] === "Yes",
+            start,
+            end
+        };
+}
+
+function syncProjectAppointmentFromReports(appointment, reports) {
+        const sessions = reports
+            .filter(report =>
+                String(report["Appointment ID"] || "") === String(appointment["Appointment ID"] || "")
+            )
+            .map(getActualSessionFromReport)
+            .filter(Boolean);
+        const completedSession = sessions.find(session => session.projectComplete);
+        appointment["Service Sessions"] = JSON.stringify(sessions.map(session => ({
+            date: session.date,
+            signInTime: session.signInTime,
+            endDate: session.endDate,
+            signOutTime: session.signOutTime
+        })));
+        appointment["Service Report ID"] = sessions.length
+            ? sessions[sessions.length - 1].reportId
+            : "";
+        appointment["Project Complete"] = completedSession ? "Yes" : "No";
+        appointment.Status = completedSession
+            ? "Completed"
+            : appointment["Staff ID"] ? "Pending" : "Reschedule Required";
+        if (completedSession) {
+            appointment["Actual Start Date"] = completedSession.date;
+            appointment["Actual Start Time"] = completedSession.signInTime;
+            appointment["Actual End Date"] = completedSession.endDate;
+            appointment["Actual End Time"] = completedSession.signOutTime;
+        } else {
+            appointment["Actual Start Date"] = "";
+            appointment["Actual Start Time"] = "";
+            appointment["Actual End Date"] = "";
+            appointment["Actual End Time"] = "";
+        }
+        return sessions;
+}
+
+function flagVisitsConflictingWithCompletedAppointment(workbook, appointments, completedIndex) {
+    const completed = appointments[completedIndex];
+    if (!completed || !completed["Staff ID"]) {
+        return;
+    }
+
+    let sessions = [];
+    if (Number(completed["Project Days"] || 0) > 0) {
+        try {
+            sessions = JSON.parse(String(completed["Service Sessions"] || "[]"));
+        } catch (error) {
+            throw new Error("Stored Project service sessions are invalid.", { cause: error });
+        }
+        if (!Array.isArray(sessions)) {
+            throw new Error("Stored Project service sessions must be a list.");
+        }
+    } else {
+        const interval = appointmentInterval(completed, true);
+        if (interval) {
+            sessions = [{
+                date: new Date(interval.start).getFullYear() + "-" +
+                    String(new Date(interval.start).getMonth() + 1).padStart(2, "0") + "-" +
+                    String(new Date(interval.start).getDate()).padStart(2, "0"),
+                signInTime: `${String(new Date(interval.start).getHours()).padStart(2, "0")}:${String(new Date(interval.start).getMinutes()).padStart(2, "0")}`,
+                endDate: new Date(interval.end).getFullYear() + "-" +
+                    String(new Date(interval.end).getMonth() + 1).padStart(2, "0") + "-" +
+                    String(new Date(interval.end).getDate()).padStart(2, "0"),
+                signOutTime: `${String(new Date(interval.end).getHours()).padStart(2, "0")}:${String(new Date(interval.end).getMinutes()).padStart(2, "0")}`
+            }];
+        }
+    }
+
+    let changed = false;
+    const tickets = workbook.Sheets.Ticket
+        ? XLSX.utils.sheet_to_json(workbook.Sheets.Ticket)
+        : [];
+    sessions.forEach(session => {
+        const start = localDateTime(session.date, session.signInTime);
+        const end = localDateTime(session.endDate || session.date, session.signOutTime);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) {
+            return;
+        }
+        const actualSession = {
+            "Appointment ID": `${completed["Appointment ID"]}-session`,
+            "Ticket ID": completed["Ticket ID"],
+            "Staff ID": completed["Staff ID"],
+            "Start Date": session.date,
+            "Start Time": session.signInTime,
+            "End Date": session.endDate || session.date,
+            "End Time": session.signOutTime,
+            "Project Days": 0,
+            Status: "Completed"
+        };
+        appointments.forEach((appointment, index) => {
+            if (
+                index === completedIndex ||
+                String(appointment["Staff ID"] || "") !== String(completed["Staff ID"]) ||
+                !["Pending", "Confirmed"].includes(String(appointment.Status || ""))
+            ) {
+                return;
+            }
+            const interval = appointmentInterval(appointment, false);
+            if (
+                !interval ||
+                interval.start < start ||
+                !hasSchedulingConflict(appointment, [actualSession])
+            ) {
+                return;
+            }
+            appointment["Staff ID"] = "";
+            appointment.Status = "Reschedule Required";
+            appointment["Scheduling Note"] =
+                "The technician's completed service session conflicts with this booking. Rescheduling is required.";
+            const ticket = tickets.find(row =>
+                String(row["Ticket ID"] || "") === String(appointment["Ticket ID"] || "")
+            );
+            if (ticket) {
+                ticket["Appointment Status"] = "Reschedule Required";
+                ticket["Visit Technician"] = "";
+            }
+            changed = true;
+        });
+    });
+
+    if (changed) {
+        workbook.Sheets.Ticket = XLSX.utils.json_to_sheet(tickets);
+    }
+}
+
+function flagVisitsConflictingWithAppointmentReservation(workbook, appointments, reservationIndex) {
+    const reservation = appointments[reservationIndex];
+    if (
+        !reservation ||
+        !reservation["Staff ID"] ||
+        !["Pending", "Confirmed"].includes(String(reservation.Status || ""))
+    ) {
+        return;
+    }
+
+    const tickets = workbook.Sheets.Ticket
+        ? XLSX.utils.sheet_to_json(workbook.Sheets.Ticket)
+        : [];
+    let changed = false;
+    appointments.forEach((appointment, index) => {
+        if (
+            index === reservationIndex ||
+            String(appointment["Staff ID"] || "") !== String(reservation["Staff ID"]) ||
+            !["Pending", "Confirmed"].includes(String(appointment.Status || "")) ||
+            !hasSchedulingConflict(appointment, [reservation])
+        ) {
+            return;
+        }
+
+        appointment["Staff ID"] = "";
+        appointment.Status = "Reschedule Required";
+        appointment["Scheduling Note"] =
+            "The technician's Project reservation conflicts with this booking. Rescheduling is required.";
+        const ticket = tickets.find(row =>
+            String(row["Ticket ID"] || "") === String(appointment["Ticket ID"] || "")
+        );
+        if (ticket) {
+            ticket["Appointment Status"] = "Reschedule Required";
+            ticket["Visit Technician"] = "";
+        }
+        changed = true;
+    });
+
+    if (changed) {
+        workbook.Sheets.Ticket = XLSX.utils.json_to_sheet(tickets);
+    }
+}
+
+app.get(
+    "/api/tickets/:ticketId/appointments",
+    requireStaffSession,
+    (req, res) => {
+        try {
+            const workbook = XLSX.readFile(excelFile);
+            const ticketSheet = workbook.Sheets.Ticket;
+            if (!ticketSheet) {
+                return res.status(404).json({ message: "Ticket sheet not found." });
+            }
+            const tickets = XLSX.utils.sheet_to_json(ticketSheet);
+            if (!tickets.some(ticket => String(ticket["Ticket ID"] || "") === req.params.ticketId)) {
+                return res.status(404).json({ message: "Ticket not found." });
+            }
+            const { roster } = ensureStaffRoster(workbook);
+            const appointments = readAppointments(workbook)
+                .filter(appointment =>
+                String(appointment["Ticket ID"] || "") === req.params.ticketId
+                )
+                .map(appointment => ({
+                    ...appointment,
+                    technicianName: String(
+                        roster.find(person =>
+                            String(person["Staff ID"] || "") === String(appointment["Staff ID"] || "")
+                        )?.Name || ""
+                    )
+                }));
+            return res.json(appointments);
+        } catch (error) {
+            console.error("Get ticket appointments error:", error);
+            return res.status(500).json({ message: "Unable to load ticket appointments." });
+        }
+    }
+);
+
+app.post("/api/staff/tickets/:ticketId/appointments", requireStaffSession, (req, res) => {
+    try {
+        const body = req.body && typeof req.body === "object" ? req.body : {};
+        const address = typeof body.address === "string" ? body.address.trim() : "";
+        const date = typeof body.date === "string" ? body.date.trim() : "";
+        const time = typeof body.time === "string" ? body.time.trim() : "";
+        const projectDays = Number(body.projectDays || 0);
+        const durationHours = Number(body.durationHours || 0);
+        const projectDayMode = body.projectDayMode || "";
+        const requestedStaffId = typeof body.staffId === "string" ? body.staffId.trim() : "";
+        if (!address || address.length > 500) {
+            return res.status(400).json({ message: "Provide a visit address of at most 500 characters." });
+        }
+        if (
+            (projectDays > 0 && (!Number.isInteger(projectDays) || !["calendar", "weekdays"].includes(projectDayMode))) ||
+            (projectDays <= 0 && (!Number.isFinite(durationHours) || durationHours <= 0))
+        ) {
+            return res.status(400).json({ message: "Provide a valid appointment duration or Project day reservation." });
+        }
+        const dateValidation = projectDays > 0
+            ? validateProjectBookingDate(date)
+            : validateAppointmentDateTime(date, time);
+        if (dateValidation) {
+            return res.status(400).json({ message: dateValidation });
+        }
+
+        const workbook = XLSX.readFile(excelFile);
+        const ticketSheet = workbook.Sheets.Ticket;
+        if (!ticketSheet) return res.status(404).json({ message: "Ticket sheet not found." });
+        const tickets = XLSX.utils.sheet_to_json(ticketSheet);
+        const ticket = tickets.find(row =>
+            String(row["Ticket ID"] || "") === req.params.ticketId
+        );
+        if (!ticket) {
+            return res.status(404).json({ message: "Ticket not found." });
+        }
+        const { roster } = ensureStaffRoster(workbook);
+        const appointments = readAppointments(workbook);
+        let requestedTechnician = null;
+        if (requestedStaffId) {
+            requestedTechnician = roster.find(person =>
+                String(person["Staff ID"] || "") === requestedStaffId
+            );
+            if (
+                !requestedTechnician ||
+                String(requestedTechnician.Active || "Yes").toLowerCase() === "no" ||
+                !getStaffRoleEligibility(requestedTechnician)
+            ) {
+                return res.status(400).json({ message: "Choose an active technician eligible for appointments." });
+            }
+            const assignedStaffId = String(ticket["Assigned Staff ID"] || "").trim();
+            const legacyAssignee = String(ticket["Assigned Engineer"] || "").trim().toLowerCase();
+            if (
+                (assignedStaffId && assignedStaffId !== requestedStaffId) ||
+                (!assignedStaffId && legacyAssignee !== String(requestedTechnician.Name || "").trim().toLowerCase())
+            ) {
+                return res.status(400).json({ message: "Choose a ticket assigned to this staff member." });
+            }
+        }
+        const candidate = getAppointmentCandidate({
+            date,
+            time,
+            durationHours: projectDays ? null : durationHours,
+            projectDays,
+            projectDayMode,
+            address,
+            ticketId: req.params.ticketId
+        });
+        if (!candidate) return res.status(400).json({ message: "Provide a valid appointment date and time." });
+
+        let technician = requestedStaffId
+            ? requestedTechnician
+            : chooseTechnician(
+                roster.filter(getStaffRoleEligibility),
+                appointments,
+                candidate,
+                ["Technician", "Engineer", "IT Support Staff"]
+            );
+        if (
+            technician &&
+            hasSchedulingConflict(
+                { ...candidate, "Staff ID": String(technician["Staff ID"]) },
+                appointments
+            )
+        ) {
+            return res.status(409).json({ message: "This technician is unavailable at the requested time or travel buffer." });
+        }
+        if (requestedStaffId && !technician) {
+            return res.status(400).json({ message: "Choose an active technician eligible for appointments." });
+        }
+        const appointment = buildAppointmentRecord(
+            candidate,
+            `A-${crypto.randomUUID()}`,
+            technician ? String(technician["Staff ID"]) : "",
+            technician ? "" : "No eligible technician is available for this requested time. Scheduling follow-up is required."
+        );
+        writeWorkbook(workbook, () => {
+            const latestWorkbook = XLSX.readFile(excelFile);
+            const latestRoster = ensureStaffRoster(latestWorkbook).roster;
+            const latestAppointments = readAppointments(latestWorkbook);
+            if (requestedStaffId) {
+                const latestTickets = latestWorkbook.Sheets.Ticket
+                    ? XLSX.utils.sheet_to_json(latestWorkbook.Sheets.Ticket)
+                    : [];
+                const latestTicket = latestTickets.find(row =>
+                    String(row["Ticket ID"] || "") === req.params.ticketId
+                );
+                technician = latestRoster.find(person =>
+                    String(person["Staff ID"] || "") === requestedStaffId &&
+                    String(person.Active || "Yes").toLowerCase() !== "no" &&
+                    getStaffRoleEligibility(person)
+                );
+                if (!technician) {
+                    const error = new Error("Choose an active technician eligible for appointments.");
+                    error.code = "INVALID_APPOINTMENT_STAFF";
+                    throw error;
+                }
+                const latestAssignedStaffId = String(latestTicket?.["Assigned Staff ID"] || "").trim();
+                const latestLegacyAssignee = String(latestTicket?.["Assigned Engineer"] || "").trim().toLowerCase();
+                if (
+                    !latestTicket ||
+                    (latestAssignedStaffId && latestAssignedStaffId !== requestedStaffId) ||
+                    (!latestAssignedStaffId && latestLegacyAssignee !== String(technician.Name || "").trim().toLowerCase())
+                ) {
+                    const error = new Error("Choose a ticket assigned to this staff member.");
+                    error.code = "APPOINTMENT_TICKET_ASSIGNMENT";
+                    throw error;
+                }
+                if (
+                    hasSchedulingConflict(
+                        { ...candidate, "Staff ID": String(technician["Staff ID"]) },
+                        latestAppointments
+                    )
+                ) {
+                    const error = new Error("This technician is unavailable at the requested time or travel buffer.");
+                    error.code = "APPOINTMENT_CONFLICT";
+                    throw error;
+                }
+            } else {
+                technician = chooseTechnician(
+                    latestRoster.filter(getStaffRoleEligibility),
+                    latestAppointments,
+                    candidate,
+                    ["Technician", "Engineer", "IT Support Staff"]
+                );
+            }
+            appointment["Staff ID"] = technician ? String(technician["Staff ID"]) : "";
+            appointment.Status = technician ? "Pending" : "Reschedule Required";
+            appointment["Scheduling Note"] = technician
+                ? ""
+                : "No eligible technician is available for this requested time. Scheduling follow-up is required.";
+            setWorkbookSheet(
+                workbook,
+                "StaffRoster",
+                XLSX.utils.json_to_sheet(latestRoster, { header: STAFF_ROSTER_COLUMNS })
+            );
+            if (latestWorkbook.Sheets.Ticket) {
+                workbook.Sheets.Ticket = latestWorkbook.Sheets.Ticket;
+            }
+            saveAppointments(workbook, latestAppointments.concat(appointment));
+        });
+        return res.status(201).json({ appointment, technician: technician ? String(technician.Name || "") : null });
+    } catch (error) {
+        if (error && error.code === "DATABASE_LOCKED") {
+            return res.status(409).json({ message: error.message });
+        }
+        if (error && error.code === "APPOINTMENT_CONFLICT") {
+            return res.status(409).json({ message: error.message });
+        }
+        if (error && error.code === "INVALID_APPOINTMENT_STAFF") {
+            return res.status(400).json({ message: error.message });
+        }
+        if (error && error.code === "APPOINTMENT_TICKET_ASSIGNMENT") {
+            return res.status(400).json({ message: error.message });
+        }
+        console.error("Create ticket appointment error:", error);
+        return res.status(500).json({ message: "Unable to create the appointment." });
+    }
+});
 
 app.get(
     "/api/tickets/:ticketId/service-report",
@@ -2626,8 +4036,13 @@ app.post(
                 signInTime,
                 signOutTime,
                 tasksDone,
-                resolution
+                resolution,
+                appointmentId,
+                projectComplete = false
             } = req.body;
+            if (projectComplete && !appointmentId) {
+                return res.status(400).json({ message: "Select the Project appointment before marking it complete." });
+            }
 
             const workbook = XLSX.readFile(excelFile);
 
@@ -2655,16 +4070,134 @@ app.post(
             }
 
             const ticket = ticketsData[ticketIndex];
+            const appointments = readAppointments(workbook);
+            const appointmentIndex = appointmentId
+                ? appointments.findIndex(appointment =>
+                    String(appointment["Appointment ID"] || "") === String(appointmentId) &&
+                    String(appointment["Ticket ID"] || "") === String(ticketId)
+                )
+                : -1;
+            let resolvedEngineer = engineer || "";
+            if (isProjectCreditTicket(ticket) && !appointmentId) {
+                return res.status(400).json({ message: "Select a Project appointment for this service report." });
+            }
+            if (appointmentId && appointmentIndex === -1) {
+                return res.status(404).json({ message: "Appointment not found for this ticket." });
+            }
+            if (appointmentIndex >= 0) {
+                const appointment = appointments[appointmentIndex];
+                const isProject = Number(appointment["Project Days"] || 0) > 0;
+                const roster = ensureStaffRoster(workbook).roster;
+                const assignedTechnician = roster.find(person =>
+                    String(person["Staff ID"] || "") === String(appointment["Staff ID"] || "")
+                );
+                resolvedEngineer = resolvedEngineer || String(assignedTechnician?.Name || "");
+                if (!["Pending", "Confirmed"].includes(String(appointment.Status || ""))) {
+                    return res.status(409).json({ message: "This appointment is not awaiting a service report." });
+                }
+                if (projectComplete && !isProject) {
+                    return res.status(400).json({ message: "Only a multi-day Project appointment can be marked complete." });
+                }
+                if (!signInTime || !signOutTime || !date) {
+                    return res.status(400).json({ message: "Appointment reports require a service date and sign-in and sign-out times." });
+                }
+                if (!isProject && reportsData.some(report =>
+                    String(report["Appointment ID"] || "") === String(appointmentId)
+                )) {
+                    return res.status(409).json({ message: "A service report has already been submitted for this appointment." });
+                }
+                if (isProject && !projectReservationDates(appointment).includes(date)) {
+                    return res.status(400).json({ message: "The service session date must be one of the reserved Project days." });
+                }
+                let actualEnd = localDateTime(date, signOutTime);
+                const actualStart = localDateTime(date, signInTime);
+                if (!Number.isFinite(actualStart) || !Number.isFinite(actualEnd)) {
+                    return res.status(400).json({ message: "Provide valid service sign-in and sign-out times." });
+                }
+                if (actualEnd <= actualStart) {
+                    actualEnd += 24 * 60 * 60 * 1000;
+                }
+                const plannedInterval = appointmentInterval(appointment, false);
+                if (!plannedInterval || actualEnd <= plannedInterval.start) {
+                    return res.status(400).json({ message: "The reported service time must end after this appointment starts." });
+                }
+                const actualEndDate = new Date(actualEnd);
+                const actualEndDateString = [
+                    actualEndDate.getFullYear(),
+                    String(actualEndDate.getMonth() + 1).padStart(2, "0"),
+                    String(actualEndDate.getDate()).padStart(2, "0")
+                ].join("-");
+                const actualEndTime = `${String(actualEndDate.getHours()).padStart(2, "0")}:${String(actualEndDate.getMinutes()).padStart(2, "0")}`;
+                if (isProject) {
+                    let sessions;
+                    try {
+                        sessions = JSON.parse(String(appointment["Service Sessions"] || "[]"));
+                    } catch (error) {
+                        throw new Error("Stored Project service sessions are invalid.", { cause: error });
+                    }
+                    if (!Array.isArray(sessions)) {
+                        throw new Error("Stored Project service sessions must be a list.");
+                    }
+                    const currentSession = {
+                        date,
+                        signInTime,
+                        endDate: actualEndDateString,
+                        signOutTime: actualEndTime
+                    };
+                    const sessionAppointment = {
+                        "Appointment ID": `${appointment["Appointment ID"]}-session`,
+                        "Ticket ID": ticketId,
+                        "Staff ID": appointment["Staff ID"],
+                        "Start Date": date,
+                        "Start Time": signInTime,
+                        "End Date": actualEndDateString,
+                        "End Time": actualEndTime,
+                        "Project Days": 0,
+                        Status: "Completed"
+                    };
+                    const previousSessions = sessions.map(session => ({
+                        ...sessionAppointment,
+                        "Appointment ID": `${appointment["Appointment ID"]}-session-${session.date}-${session.signInTime}`,
+                        "Start Date": session.date,
+                        "Start Time": session.signInTime,
+                        "End Date": session.endDate || session.date,
+                        "End Time": session.signOutTime
+                    }));
+                    if (hasSchedulingConflict(sessionAppointment, previousSessions)) {
+                        return res.status(409).json({ message: "This Project service session overlaps another session or its travel buffer." });
+                    }
+                    sessions.push(currentSession);
+                    appointment["Service Sessions"] = JSON.stringify(sessions);
+                    appointment["Project Complete"] = projectComplete ? "Yes" : "No";
+                    if (projectComplete) {
+                        appointment["Actual Start Date"] = date;
+                        appointment["Actual Start Time"] = signInTime;
+                        appointment["Actual End Date"] = actualEndDateString;
+                        appointment["Actual End Time"] = actualEndTime;
+                        appointment.Status = "Completed";
+                    }
+                } else {
+                    appointment["Actual Start Date"] = date;
+                    appointment["Actual Start Time"] = signInTime;
+                    appointment["Actual End Date"] = actualEndDateString;
+                    appointment["Actual End Time"] = actualEndTime;
+                    appointment.Status = "Completed";
+                }
+            }
             const newReport = buildServiceReportFromTicket(ticket, {
                 onsite,
                 serviceMode,
-                engineer,
+                engineer: resolvedEngineer,
                 date,
                 signInTime,
                 signOutTime,
                 tasksDone,
                 resolution
             });
+            if (appointmentIndex >= 0) {
+                newReport["Appointment ID"] = String(appointmentId);
+                newReport["Project Complete"] = projectComplete ? "Yes" : "No";
+            }
 
             let creditSettlement = {
                 actualChargedCredits: 0,
@@ -2686,13 +4219,15 @@ app.post(
                     });
                 }
 
-                creditSettlement = settleTicketCredits(
-                    workbook,
-                    ticket,
-                    billableCredits
-                );
-                if (creditSettlement.error) {
-                    return res.status(500).json({ message: creditSettlement.error });
+                if (!isProjectCreditTicket(ticket)) {
+                    creditSettlement = settleTicketCredits(
+                        workbook,
+                        ticket,
+                        billableCredits
+                    );
+                    if (creditSettlement.error) {
+                        return res.status(500).json({ message: creditSettlement.error });
+                    }
                 }
             } else if (
                 String(ticket["On-site Support Type"] || "").trim().toLowerCase() === "project"
@@ -2710,12 +4245,52 @@ app.post(
             });
 
             reportsData.push(newReport);
+            if (isProjectCreditTicket(ticket)) {
+                const projectBillableCredits = getProjectTicketBillableCredits(
+                    reportsData,
+                    ticketId
+                );
+                creditSettlement = settleProjectTicketCredits(
+                    workbook,
+                    ticket,
+                    projectBillableCredits,
+                    areProjectAppointmentsFinalized(appointments, ticketId)
+                );
+                if (creditSettlement.error) {
+                    return res.status(500).json({ message: creditSettlement.error });
+                }
+                Object.assign(newReport, {
+                    "Credits Charged": creditSettlement.additionalCredits,
+                    "Unpaid Credits": creditSettlement.unpaidCredits,
+                    "Credit Settlement Status": ticket["Credit Settlement Status"]
+                });
+                reportsData[reportsData.length - 1] = newReport;
+            }
 
-            ticketsData[ticketIndex]["Status"] = "Closed";
             ticketsData[ticketIndex]["Service Result"] = resolution || "";
+            if (appointmentIndex >= 0) {
+                appointments[appointmentIndex]["Service Report ID"] = newReport["Report ID"];
+                flagVisitsConflictingWithCompletedAppointment(
+                    workbook,
+                    appointments,
+                    appointmentIndex
+                );
+                const otherOpenAppointments = appointments.some(appointment =>
+                    String(appointment["Ticket ID"] || "") === String(ticketId) &&
+                    ["Pending", "Confirmed", "Reschedule Required"].includes(String(appointment.Status || ""))
+                );
+                if (!otherOpenAppointments) {
+                    ticketsData[ticketIndex]["Status"] = "Closed";
+                }
+            } else {
+                ticketsData[ticketIndex]["Status"] = "Closed";
+            }
 
-            if (engineer) {
+            if (engineer && appointmentIndex < 0) {
                 ticketsData[ticketIndex]["Assigned Engineer"] = engineer;
+            }
+            if (appointmentIndex >= 0) {
+                ticketsData[ticketIndex]["Visit Technician"] = resolvedEngineer;
             }
 
             setWorkbookSheet(
@@ -2723,6 +4298,9 @@ app.post(
                 "ServiceReport",
                 XLSX.utils.json_to_sheet(reportsData)
             );
+            if (appointmentIndex >= 0) {
+                saveAppointments(workbook, appointments);
+            }
             workbook.Sheets["Ticket"] = XLSX.utils.json_to_sheet(ticketsData);
 
             writeWorkbook(workbook);
@@ -2763,7 +4341,8 @@ app.put(
                 signInTime,
                 signOutTime,
                 tasksDone,
-                resolution
+                resolution,
+                projectComplete
             } = req.body;
 
             const workbook = XLSX.readFile(excelFile);
@@ -2820,13 +4399,15 @@ app.put(
                     });
                 }
 
-                creditSettlement = settleTicketCredits(
-                    workbook,
-                    ticket,
-                    billableCredits
-                );
-                if (creditSettlement.error) {
-                    return res.status(500).json({ message: creditSettlement.error });
+                if (!isProjectCreditTicket(ticket)) {
+                    creditSettlement = settleTicketCredits(
+                        workbook,
+                        ticket,
+                        billableCredits
+                    );
+                    if (creditSettlement.error) {
+                        return res.status(500).json({ message: creditSettlement.error });
+                    }
                 }
             } else if (
                 String(ticket["On-site Support Type"] || "").trim().toLowerCase() === "project"
@@ -2854,11 +4435,111 @@ app.put(
                 "Credit Settlement Status": ticket["Credit Settlement Status"]
             };
 
+            const reportAppointmentId = String(existingReport["Appointment ID"] || "");
+            updatedReport["Project Complete"] = projectComplete === undefined
+                ? String(existingReport["Project Complete"] || "No")
+                : projectComplete ? "Yes" : "No";
+            if (reportAppointmentId) {
+                const appointments = readAppointments(workbook);
+                const appointmentIndex = appointments.findIndex(appointment =>
+                    String(appointment["Appointment ID"] || "") === reportAppointmentId &&
+                    String(appointment["Ticket ID"] || "") === String(ticketId)
+                );
+                if (appointmentIndex === -1) {
+                    return res.status(409).json({ message: "The appointment linked to this report no longer exists." });
+                }
+                const appointment = appointments[appointmentIndex];
+                const isProject = Number(appointment["Project Days"] || 0) > 0;
+                if (isProject) {
+                    if (!projectReservationDates(appointment).includes(updatedReport.Date)) {
+                        return res.status(400).json({ message: "The service session date must be one of the reserved Project days." });
+                    }
+                    reportsData[reportIndex] = updatedReport;
+                    const sessions = syncProjectAppointmentFromReports(appointment, reportsData);
+                    const sessionRows = sessions.map(session => ({
+                        "Appointment ID": `${appointment["Appointment ID"]}-session-${session.date}-${session.signInTime}`,
+                        "Ticket ID": ticketId,
+                        "Staff ID": appointment["Staff ID"],
+                        "Start Date": session.date,
+                        "Start Time": session.signInTime,
+                        "End Date": session.endDate,
+                        "End Time": session.signOutTime,
+                        "Project Days": 0,
+                        Status: "Completed"
+                    }));
+                    if (sessionRows.some((session, index) =>
+                        hasSchedulingConflict(session, sessionRows.filter((_, row) => row !== index))
+                    )) {
+                        return res.status(409).json({ message: "Project work sessions must not overlap and must include one hour of travel time." });
+                    }
+                } else {
+                    const actualSession = getActualSessionFromReport(updatedReport);
+                    if (!actualSession) {
+                        return res.status(400).json({ message: "Provide valid service sign-in and sign-out times." });
+                    }
+                    const updatedAppointment = {
+                        ...appointment,
+                        "Actual Start Date": updatedReport.Date,
+                        "Actual Start Time": updatedReport.SignInTime,
+                        "Actual End Date": actualSession.endDate,
+                        "Actual End Time": actualSession.signOutTime,
+                        Status: "Completed"
+                    };
+                    if (hasSchedulingConflict(
+                        updatedAppointment,
+                        appointments.filter((_, index) => index !== appointmentIndex)
+                    )) {
+                        return res.status(409).json({ message: "Changing this report would create an appointment overlap or violate the travel buffer." });
+                    }
+                    Object.assign(appointment, updatedAppointment);
+                }
+                flagVisitsConflictingWithCompletedAppointment(
+                    workbook,
+                    appointments,
+                    appointmentIndex
+                );
+                if (isProject && appointment.Status === "Pending") {
+                    flagVisitsConflictingWithAppointmentReservation(
+                        workbook,
+                        appointments,
+                        appointmentIndex
+                    );
+                }
+                saveAppointments(workbook, appointments);
+            }
+
             reportsData[reportIndex] = updatedReport;
 
             ticket["Service Result"] = updatedReport.Resolution || "";
-            if (engineer) {
+            if (engineer && !reportAppointmentId) {
                 ticket["Assigned Engineer"] = engineer;
+            } else if (reportAppointmentId && engineer) {
+                ticket["Visit Technician"] = engineer;
+            }
+            if (reportAppointmentId) {
+                const otherOpenAppointments = readAppointments(workbook).some(appointment =>
+                    String(appointment["Ticket ID"] || "") === String(ticketId) &&
+                    ["Pending", "Confirmed", "Reschedule Required"].includes(String(appointment.Status || ""))
+                );
+                if (otherOpenAppointments && ticket.Status === "Closed") {
+                    ticket.Status = "In Progress";
+                } else if (!otherOpenAppointments) {
+                    ticket.Status = "Closed";
+                }
+            }
+            if (isProjectCreditTicket(ticket)) {
+                creditSettlement = settleProjectTicketCredits(
+                    workbook,
+                    ticket,
+                    getProjectTicketBillableCredits(reportsData, ticketId),
+                    areProjectAppointmentsFinalized(readAppointments(workbook), ticketId)
+                );
+                if (creditSettlement.error) {
+                    return res.status(500).json({ message: creditSettlement.error });
+                }
+                updatedReport["Credits Charged"] = creditSettlement.additionalCredits;
+                updatedReport["Unpaid Credits"] = creditSettlement.unpaidCredits;
+                updatedReport["Credit Settlement Status"] = ticket["Credit Settlement Status"];
             }
             workbook.Sheets["Ticket"] = XLSX.utils.json_to_sheet(ticketsData);
 
@@ -2909,12 +4590,81 @@ app.delete(
                 });
             }
 
+            const deletedReport = reportsData[reportIndex];
             reportsData.splice(reportIndex, 1);
             setWorkbookSheet(
                 workbook,
                 "ServiceReport",
                 XLSX.utils.json_to_sheet(reportsData)
             );
+            const appointmentId = String(deletedReport["Appointment ID"] || "");
+            if (appointmentId && workbook.Sheets.Appointment) {
+                const appointments = readAppointments(workbook);
+                const appointment = appointments.find(row =>
+                    String(row["Appointment ID"] || "") === appointmentId &&
+                    String(row["Ticket ID"] || "") === String(ticketId)
+                );
+                if (appointment) {
+                    if (Number(appointment["Project Days"] || 0) > 0) {
+                        syncProjectAppointmentFromReports(appointment, reportsData);
+                        const appointmentIndex = appointments.indexOf(appointment);
+                        if (appointment.Status === "Pending") {
+                            flagVisitsConflictingWithAppointmentReservation(
+                                workbook,
+                                appointments,
+                                appointmentIndex
+                            );
+                        }
+                    } else {
+                        appointment["Actual End Date"] = "";
+                        appointment["Actual End Time"] = "";
+                        appointment["Actual Start Date"] = "";
+                        appointment["Actual Start Time"] = "";
+                        appointment["Service Report ID"] = "";
+                        appointment.Status = appointment["Staff ID"] ? "Pending" : "Reschedule Required";
+                    }
+                    saveAppointments(workbook, appointments);
+                    const ticketSheet = workbook.Sheets.Ticket;
+                    if (ticketSheet) {
+                        const tickets = XLSX.utils.sheet_to_json(ticketSheet);
+                        const ticket = tickets.find(row =>
+                            String(row["Ticket ID"] || "") === String(ticketId)
+                        );
+                        if (ticket) {
+                            const hasOpenAppointment = appointments.some(row =>
+                                String(row["Ticket ID"] || "") === String(ticketId) &&
+                                ["Pending", "Confirmed", "Reschedule Required"].includes(String(row.Status || ""))
+                            );
+                            if (hasOpenAppointment && ticket.Status === "Closed") {
+                                ticket.Status = "In Progress";
+                            } else if (!hasOpenAppointment) {
+                                ticket.Status = "Closed";
+                            }
+                            ticket["Appointment Status"] = appointment.Status;
+                            workbook.Sheets.Ticket = XLSX.utils.json_to_sheet(tickets);
+                        }
+                    }
+                }
+            }
+            const ticketSheet = workbook.Sheets.Ticket;
+            if (ticketSheet) {
+                const tickets = XLSX.utils.sheet_to_json(ticketSheet);
+                const ticket = tickets.find(row =>
+                    String(row["Ticket ID"] || "") === String(ticketId)
+                );
+                if (ticket && isProjectCreditTicket(ticket)) {
+                    const settlement = settleProjectTicketCredits(
+                        workbook,
+                        ticket,
+                        getProjectTicketBillableCredits(reportsData, ticketId),
+                        areProjectAppointmentsFinalized(readAppointments(workbook), ticketId)
+                    );
+                    if (settlement.error) {
+                        return res.status(500).json({ message: settlement.error });
+                    }
+                    workbook.Sheets.Ticket = XLSX.utils.json_to_sheet(tickets);
+                }
+            }
             writeWorkbook(workbook);
 
             res.json({

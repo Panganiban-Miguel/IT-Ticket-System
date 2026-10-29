@@ -155,6 +155,12 @@ const durationLabel =
 const appointmentDurationInput =
     document.getElementById("appointmentDuration");
 
+const projectDaysInput =
+    document.getElementById("projectDays");
+
+const projectDaysField =
+    document.getElementById("projectDaysField");
+
 const customerNameDialog =
     document.getElementById("customerNameDialog");
 
@@ -275,16 +281,14 @@ function getOnSiteDurationSettings(onSiteSupportType) {
                 minValue: 1
             };
 
-        case "Project":
-            return {
-                minHours: 0,
-                label: "Minimum 1 day",
-                unit: "days",
-                step: "1",
-                minValue: 1,
-                wholeNumberOnly: true,
-                skipCredits: true
-            };
+//        case "Project":
+//            return {
+//                minHours: 0,
+//                label: "Enter estimate total work hours",
+//                unit: "hours",
+//                step: "0.5",
+//                minValue: 0.5
+//            };
 
         default:
             return null;
@@ -296,6 +300,21 @@ function getOnSiteDurationSettings(onSiteSupportType) {
 function validateAppointmentDateTime(appointmentDate, appointmentTime, now = new Date()) {
     if (!appointmentDate || !appointmentTime) {
         return "Please select both an appointment date and time.";
+    }
+
+    function validateProjectBookingDate(appointmentDate, now = new Date()) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(appointmentDate || ""))) {
+            return "Please select a valid Project start date.";
+        }
+        const selected = new Date(`${appointmentDate}T00:00:00`);
+        if (Number.isNaN(selected.getTime())) {
+            return "Please select a valid Project start date.";
+        }
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        if (selected <= today) {
+            return "A multi-day Project reservation must start on a future date.";
+        }
+        return null;
     }
 
     const selectedDateTime = new Date(`${appointmentDate}T${appointmentTime}:00`);
@@ -350,9 +369,25 @@ if (supportTypeSelect && appointmentSection) {
 
         appointmentSection.style.display =
             isOnSiteSupport ? "block" : "none";
+        const appointmentAddress = document.getElementById("appointmentAddress");
+        const projectDayModeField = document.getElementById("projectDayModeField");
+        const isProject = onSiteSupportTypeSelect?.value === "Project";
+        if (appointmentAddress) {
+            appointmentAddress.required = isOnSiteSupport;
+            if (!isOnSiteSupport) {
+                appointmentAddress.value = "";
+            }
+        }
+        if (projectDayModeField) {
+            projectDayModeField.style.display = isOnSiteSupport && isProject ? "block" : "none";
+        }
 
 
         if (!isOnSiteSupport) {
+            const appointmentTimeGroup = document.getElementById("appointmentTimeGroup");
+            const appointmentTimeInput = document.getElementById("appointmentTime");
+            if (appointmentTimeGroup) appointmentTimeGroup.style.display = "none";
+            if (appointmentTimeInput) appointmentTimeInput.required = false;
 
             const appointmentDate =
                 document.getElementById("appointmentDate");
@@ -379,9 +414,12 @@ if (supportTypeSelect && appointmentSection) {
             if (appointmentDurationInput) {
                 appointmentDurationInput.value = "";
                 appointmentDurationInput.min = "1";
+                appointmentDurationInput.step = "0.5";
                 appointmentDurationInput.placeholder =
                     "Select an on-site support type";
             }
+            if (projectDaysField) projectDaysField.style.display = "none";
+            if (projectDaysInput) projectDaysInput.value = "";
 
             if (durationField) {
                 durationField.style.display = "none";
@@ -392,11 +430,20 @@ if (supportTypeSelect && appointmentSection) {
         }
 
 
-        const selectedType =
-            onSiteSupportTypeSelect?.value || "";
-
-        const settings =
-            getOnSiteDurationSettings(selectedType);
+        const selectedType = onSiteSupportTypeSelect?.value || "";
+        const settings = getOnSiteDurationSettings(selectedType);
+        const appointmentTimeGroup = document.getElementById("appointmentTimeGroup");
+        const appointmentTimeInput = document.getElementById("appointmentTime");
+        const projectNeedsNoStartTime = isProject;
+        if (appointmentTimeGroup) {
+            appointmentTimeGroup.style.display = projectNeedsNoStartTime ? "none" : "block";
+        }
+        if (appointmentTimeInput) {
+            appointmentTimeInput.required = isOnSiteSupport && !projectNeedsNoStartTime;
+            if (projectNeedsNoStartTime) {
+                appointmentTimeInput.value = "";
+            }
+        }
 
 
         if (durationField) {
@@ -405,8 +452,14 @@ if (supportTypeSelect && appointmentSection) {
         }
 
         if (durationLabel) {
-            const labelSuffix = settings?.unit === "days" ? "days" : "hours";
-            durationLabel.textContent = `Duration (${labelSuffix})`;
+            durationLabel.textContent = "Duration (hours)";
+        }
+        if (projectDaysField) {
+            projectDaysField.style.display = isOnSiteSupport && isProject ? "block" : "none";
+        }
+        if (projectDaysInput) {
+            projectDaysInput.required = isOnSiteSupport && isProject;
+            if (!isProject) projectDaysInput.value = "";
         }
 
         if (appointmentDurationInput) {
@@ -416,9 +469,7 @@ if (supportTypeSelect && appointmentSection) {
                 appointmentDurationInput.step =
                     settings.step || "0.5";
                 appointmentDurationInput.placeholder =
-                    settings.unit === "days"
-                        ? "Enter duration in days"
-                        : settings.label;
+                    settings.label;
             } else {
                 appointmentDurationInput.value = "";
                 appointmentDurationInput.min = "1";
@@ -482,74 +533,79 @@ if (ticketForm) {
                APPOINTMENT VALUES
             ----------------------------------------- */
 
+            const WORK_HOURS_PER_DAY = 8;
+
             let appointmentDate = null;
             let appointmentTime = null;
             let appointmentDuration = null;
-
+            let projectEstimatedHours = null;
+            let projectDays = null;
+            let appointmentAddress = null;
+            let projectDayMode = null;
 
             if (isOnSite) {
 
-                if (!onSiteSupportType) {
-                    alert(
-                        "Please select an on-site support type before submitting the ticket."
-                    );
-                    return;
-                }
-
-                const onSiteSettings =
-                    getOnSiteDurationSettings(onSiteSupportType);
-
-                if (!onSiteSettings) {
-                    alert(
-                        "Please select a valid on-site support type."
-                    );
-                    return;
-                }
-
                 appointmentDate =
-                    document.getElementById(
-                        "appointmentDate"
-                    )?.value || null;
-
+                    document.getElementById("appointmentDate")?.value || null;
 
                 appointmentTime =
-                    document.getElementById(
-                        "appointmentTime"
-                    )?.value || null;
+                    document.getElementById("appointmentTime")?.value || null;
 
+                appointmentAddress =
+                    document.getElementById("appointmentAddress")?.value.trim() || null;
 
-                appointmentDuration =
-                    document.getElementById(
-                        "appointmentDuration"
-                    )?.value || null;
+                if (!appointmentAddress) {
+                    alert("Please provide the on-site appointment address.");
+                    return;
+                }
 
-                const appointmentValidationMessage = validateAppointmentDateTime(
-                    appointmentDate,
-                    appointmentTime
-                );
+                projectDayMode =
+                    document.getElementById("projectDayMode")?.value || "calendar";
+
+                const appointmentValidationMessage = isProject
+                    ? validateProjectBookingDate(appointmentDate)
+                    : validateAppointmentDateTime(
+                        appointmentDate,
+                        appointmentTime
+                    );
 
                 if (appointmentValidationMessage) {
                     alert(appointmentValidationMessage);
                     return;
                 }
 
-                const rawDuration = Number(appointmentDuration);
+                if (isProject) {
 
-                if (onSiteSupportType === "Project") {
-                    if (
-                        !appointmentDuration ||
-                        !Number.isFinite(rawDuration) ||
-                        !Number.isInteger(rawDuration) ||
-                        rawDuration < 1
-                    ) {
+                    // Project does not use the manual duration input.
+                    projectDays = Number(projectDaysInput?.value);
+
+                    if (!Number.isInteger(projectDays) || projectDays < 1) {
                         alert(
-                            "Project duration is required and must be a whole number of days (minimum 1 day)."
+                            "Estimated Project days are required and must be a whole number (minimum 1 day)."
                         );
                         return;
                     }
 
-                    appointmentDuration = String(rawDuration);
+                    projectEstimatedHours =
+                        projectDays * WORK_HOURS_PER_DAY;
+
+                    // Preserve this for the existing downstream logic.
+                    appointmentDuration = String(projectDays);
+
                 } else {
+
+                    const onSiteSettings =
+                        getOnSiteDurationSettings(onSiteSupportType);
+
+                    if (!onSiteSettings) {
+                        alert("Please select a valid on-site support type.");
+                        return;
+                    }
+
+                    appointmentDuration =
+                        document.getElementById("appointmentDuration")?.value || null;
+
+                    const rawDuration = Number(appointmentDuration);
                     const roundedDuration = roundUpToHalfHour(rawDuration);
 
                     if (
@@ -563,23 +619,21 @@ if (ticketForm) {
                         return;
                     }
 
-                    if (
-                        !Number.isInteger(rawDuration * 2)
-                    ) {
+                    if (!Number.isInteger(rawDuration * 2)) {
                         const updatedDuration =
                             roundedDuration ?? rawDuration;
 
                         document.getElementById("appointmentDuration").value =
                             String(updatedDuration);
 
-                        appointmentDuration = String(updatedDuration);
+                        appointmentDuration =
+                            String(updatedDuration);
 
                         alert(
                             `Duration was rounded up from ${rawDuration} hour(s) to ${updatedDuration} hour(s). This increases the credit cost to ${updatedDuration} credit(s).`
                         );
                     }
                 }
-
             }
 
 
@@ -624,7 +678,19 @@ if (ticketForm) {
 
 
                 appointmentDuration:
-                    appointmentDuration
+                    appointmentDuration,
+
+                projectEstimatedHours:
+                    projectEstimatedHours,
+
+                projectDays:
+                    projectDays,
+
+                appointmentAddress:
+                    appointmentAddress,
+
+                projectDayMode:
+                    projectDayMode
 
             };
 
@@ -714,8 +780,16 @@ if (ticketForm) {
                     if (appointmentDurationInput) {
                         appointmentDurationInput.value = "";
                         appointmentDurationInput.min = "1";
+                        appointmentDurationInput.step = "0.5";
                         appointmentDurationInput.placeholder =
                             "Select an on-site support type";
+                    }
+                    if (projectDaysInput) {
+                        projectDaysInput.value = "";
+                        projectDaysInput.required = false;
+                    }
+                    if (projectDaysField) {
+                        projectDaysField.style.display = "none";
                     }
 
                     if (durationField) {
@@ -1497,10 +1571,36 @@ async function loadTicketDetails() {
             "supportType",
             supportTypeValue
         );
-
         const isOnSiteTicket =
             String(supportTypeValue).trim().toLowerCase() ===
             "on-site support";
+        const serviceReportActionGroup = document.getElementById(
+            "serviceReportActionGroup"
+        );
+        const scheduleAnotherVisitSection = document.getElementById(
+            "scheduleAnotherVisitSection"
+        );
+        if (serviceReportActionGroup) {
+            serviceReportActionGroup.hidden = !isOnSiteTicket;
+        }
+        if (scheduleAnotherVisitSection) {
+            scheduleAnotherVisitSection.hidden = !isOnSiteTicket;
+        }
+        const isProjectCreditTicket =
+            String(ticket["On-site Support Type"] || "").trim().toLowerCase() === "project" &&
+            Number(ticket["Project Estimated Hours"]) > 0;
+        const projectCreditSummary = document.getElementById("projectCreditSummary");
+        if (projectCreditSummary) {
+            projectCreditSummary.hidden = !isProjectCreditTicket;
+        }
+        if (isProjectCreditTicket) {
+            setField("projectEstimatedHours", `${ticket["Project Estimated Hours"]} hours`);
+            setField("projectReservedDays", `${ticket["Appointment Duration"] || 0} days`);
+            setField("projectBillableCredits", Number(ticket["Billable Credits"] || 0).toFixed(1));
+            setField("projectCreditsCharged", Number(ticket["Credits Charged"] || 0).toFixed(1));
+            setField("projectUnpaidCredits", Number(ticket["Unpaid Credits"] || 0).toFixed(1));
+            setField("projectCreditStatus", ticket["Credit Settlement Status"] || "Pending");
+        }
 
         toggleOnSiteTicketFields(isOnSiteTicket);
         updateAssignedRoleLabel(supportTypeValue);
@@ -1572,6 +1672,7 @@ async function loadTicketDetails() {
         }
 
         await refreshServiceReportButtonState();
+        await loadTicketAppointments(ticketId);
 
     } catch (error) {
 
@@ -1585,7 +1686,38 @@ async function loadTicketDetails() {
         );
 
     }
+}
 
+async function loadTicketAppointments(ticketId = getCurrentTicketId()) {
+        const list = document.getElementById("ticketAppointmentList");
+        if (!list || !ticketId) return;
+        try {
+            const response = await fetch(`/api/tickets/${encodeURIComponent(ticketId)}/appointments`);
+            const appointments = await response.json();
+            if (!response.ok) throw new Error(appointments.message || "Unable to load visits.");
+            list.replaceChildren();
+            if (!appointments.length) {
+                list.textContent = "No visits are scheduled.";
+                return;
+            }
+            const visitList = document.createElement("ul");
+            appointments.forEach(appointment => {
+                const row = document.createElement("li");
+                const project = Number(appointment["Project Days"] || 0) > 0;
+                const timeLabel = project
+                    ? `${appointment["Project Days"]} ${appointment["Project Day Mode"] || "calendar"} days`
+                    : `${appointment["Start Time"]}–${appointment["End Time"]}`;
+                const actualLabel = appointment["Actual End Time"]
+                    ? ` · Actual ${appointment["Actual Start Time"]}–${appointment["Actual End Time"]}`
+                    : "";
+                row.textContent = `${appointment["Start Date"]} ${timeLabel} · ${appointment.Address} · ${appointment.technicianName || "Unassigned"} · ${appointment.Status}${actualLabel}`;
+                visitList.appendChild(row);
+            });
+            list.appendChild(visitList);
+        } catch (error) {
+            console.error("Ticket appointments error:", error);
+            list.textContent = "Unable to load visits.";
+        }
 }
 
 
@@ -1639,6 +1771,7 @@ async function fetchServiceReportsForTicket(ticketId) {
 
 async function refreshServiceReportButtonState() {
     const button = document.getElementById("serviceReportActionButton");
+    const buttonGroup = document.getElementById("serviceReportActionGroup");
     const ticketId = getCurrentTicketId();
 
     if (!button || !ticketId) {
@@ -1646,23 +1779,84 @@ async function refreshServiceReportButtonState() {
     }
 
     try {
-        const reports = await fetchServiceReportsForTicket(ticketId);
-        const report = reports.length > 0 ? reports[reports.length - 1] : null;
+        // Fetch the ticket details to check its main support category.
+        const ticketResponse = await fetch(
+            `/api/tickets/${encodeURIComponent(ticketId)}`
+        );
+
+        if (!ticketResponse.ok) {
+            throw new Error("Failed to load ticket details.");
+        }
+
+        const ticket = await ticketResponse.json();
+
+        const supportType = String(
+            ticket["Support Type"] || ticket.supportType || ""
+        ).trim().toLowerCase();
+
+        const isOnSiteTicket = supportType === "on-site support";
+
+        // Hide both the button and its wrapper for non-on-site tickets.
+        button.hidden = !isOnSiteTicket;
+
+        if (buttonGroup) {
+            buttonGroup.hidden = !isOnSiteTicket;
+        }
+
+        // Stop here if service reports are not available for this ticket.
+        if (!isOnSiteTicket) {
+            button.onclick = null;
+            return;
+        }
+
+        const [reports, appointmentResponse] = await Promise.all([
+            fetchServiceReportsForTicket(ticketId),
+            fetch(`/api/tickets/${encodeURIComponent(ticketId)}/appointments`)
+        ]);
+
+        if (!appointmentResponse.ok) {
+            throw new Error("Failed to load ticket appointments.");
+        }
+
+        const appointments = await appointmentResponse.json();
+
+        const hasPendingVisit = appointments.some(appointment =>
+            ["Pending", "Confirmed"].includes(
+                String(appointment.Status || "")
+            ) &&
+            (
+                Number(appointment["Project Days"] || 0) > 0 ||
+                !appointment["Service Report ID"]
+            )
+        );
+
+        const report = reports.length > 0
+            ? reports[reports.length - 1]
+            : null;
 
         currentServiceReport = report;
-        button.textContent = report ? "View Service Report" : "Create Service Report";
+
+        button.textContent = hasPendingVisit || !report
+            ? "Create Service Report"
+            : "View Service Report";
+
         button.onclick = () => {
-            if (report) {
-                viewSavedReport();
-            } else {
+            if (hasPendingVisit || !report) {
                 openCreateServiceReportForm();
+            } else {
+                viewSavedReport();
             }
         };
 
     } catch (error) {
         console.error("Service report state error:", error);
-        button.textContent = "Create Service Report";
-        button.onclick = openCreateServiceReportForm;
+
+        // Do not reveal the button if ticket eligibility is unknown.
+        button.hidden = true;
+
+        if (buttonGroup) {
+            buttonGroup.hidden = true;
+        }
     }
 }
 
@@ -1759,7 +1953,7 @@ async function viewSavedReport() {
 
             if (unpaidCredits > 0) {
                 repCreditSettlement.textContent =
-                    `UNPAID: ${unpaidCredits} credit(s) — staff follow-up required. ${chargedCredits} of ${billableCredits} credit(s) charged.`;
+                    `UNPAID: ${unpaidCredits} credit(s) - Staff follow-up required. ${chargedCredits} of ${billableCredits} credit(s) charged.`;
                 repCreditSettlement.style.color = "#b91c1c";
                 repCreditSettlement.style.fontWeight = "bold";
             } else if (settlementStatus === "Exempt") {
@@ -1809,6 +2003,83 @@ async function populateServiceReportEngineerOptions(currentEngineer = "") {
 
     if (!select) {
         return;
+    }
+
+    async function populateServiceReportAppointmentOptions(selectedId = "") {
+        const group = document.getElementById("reportAppointmentGroup");
+        const select = document.getElementById("reportAppointmentId");
+        const projectCompleteGroup = document.getElementById("projectCompleteGroup");
+        const projectCompleteCheckbox = document.getElementById("projectComplete");
+        if (!group || !select) {
+            return;
+        }
+
+        const response = await fetch(`/api/tickets/${encodeURIComponent(getCurrentTicketId())}/appointments`);
+        const appointments = await response.json();
+        if (!response.ok) {
+            throw new Error(appointments.message || "Failed to load ticket appointments.");
+        }
+        const available = appointments.filter(appointment =>
+            appointment["Appointment ID"] === selectedId ||
+            (
+                ["Pending", "Confirmed"].includes(String(appointment.Status || "")) &&
+                (
+                    Number(appointment["Project Days"] || 0) > 0 ||
+                    !appointment["Service Report ID"]
+                )
+            )
+        );
+        select.replaceChildren();
+        const blank = document.createElement("option");
+        blank.value = "";
+        blank.textContent = "Select appointment";
+        select.appendChild(blank);
+        available.forEach(appointment => {
+            const option = document.createElement("option");
+            option.value = appointment["Appointment ID"];
+            const project = Number(appointment["Project Days"] || 0) > 0;
+            const sessions = project
+                ? JSON.parse(String(appointment["Service Sessions"] || "[]")).length
+                : 0;
+            option.textContent = `${appointment["Start Date"]} ${project ? `${appointment["Project Days"]} ${appointment["Project Day Mode"] || "calendar"} days (${sessions} sessions)` : `${appointment["Start Time"]}–${appointment["End Time"]}`} · ${appointment.technicianName || "Unassigned"} · ${appointment.Address}`;
+            option.dataset.engineer = appointment.technicianName || "";
+            option.dataset.project = project ? "true" : "false";
+            select.appendChild(option);
+        });
+        group.style.display = available.length ? "block" : "none";
+        select.required = available.length > 0;
+        select.disabled = serviceReportFormMode === "edit";
+        if (selectedId) {
+            select.value = selectedId;
+        } else if (available.length === 1) {
+            select.value = available[0]["Appointment ID"];
+        }
+        select.onchange = () => {
+            const selectedOption = select.selectedOptions[0];
+            const engineerSelect = document.getElementById("reportEngineer");
+            const isProject = selectedOption?.dataset.project === "true";
+            if (projectCompleteGroup) {
+                projectCompleteGroup.style.display = isProject ? "block" : "none";
+            }
+            if (projectCompleteCheckbox && serviceReportFormMode !== "edit") {
+                projectCompleteCheckbox.checked = false;
+            }
+            if (selectedOption?.dataset.engineer && engineerSelect) {
+                engineerSelect.value = selectedOption.dataset.engineer;
+            }
+        };
+        select.dispatchEvent(new Event("change"));
+        if (serviceReportFormMode === "edit" && selectedId) {
+            const report = currentServiceReport;
+            if (projectCompleteCheckbox) {
+                projectCompleteCheckbox.checked = report?.["Project Complete"] === "Yes";
+            }
+            const selectedOption = select.selectedOptions[0];
+            if (projectCompleteGroup) {
+                projectCompleteGroup.style.display =
+                    selectedOption?.dataset.project === "true" ? "block" : "none";
+            }
+        }
     }
 
     try {
@@ -1886,6 +2157,7 @@ async function openCreateServiceReportForm() {
     document.getElementById("reportServiceMode").value = defaults.serviceMode;
     document.getElementById("reportDate").value = defaults.date;
     await populateServiceReportEngineerOptions(defaults.engineer);
+    await populateServiceReportAppointmentOptions();
 
     modal.style.display = "flex";
 }
@@ -1920,6 +2192,7 @@ async function openEditServiceReportForm() {
     document.getElementById("reportResolution").value = currentServiceReport.Resolution || "";
 
     await populateServiceReportEngineerOptions(currentServiceReport.Engineer || currentServiceReport["Assigned Engineer"] || "");
+    await populateServiceReportAppointmentOptions(currentServiceReport["Appointment ID"] || "");
 
     closeServiceReportModal();
     modal.style.display = "flex";
@@ -1940,6 +2213,8 @@ async function submitServiceReportForm(event) {
         serviceMode,
         onsite: serviceMode === "On-site" || serviceMode === "Hybrid",
         engineer: document.getElementById("reportEngineer").value || "",
+        appointmentId: document.getElementById("reportAppointmentId")?.value || "",
+        projectComplete: Boolean(document.getElementById("projectComplete")?.checked),
         date: document.getElementById("reportDate").value || "",
         signInTime: document.getElementById("reportSignInTime").value || "",
         signOutTime: document.getElementById("reportSignOutTime").value || "",
@@ -2024,6 +2299,72 @@ async function deleteCurrentServiceReport() {
 const serviceReportForm = document.getElementById("serviceReportForm");
 if (serviceReportForm) {
     serviceReportForm.addEventListener("submit", submitServiceReportForm);
+}
+
+const addAppointmentForm = document.getElementById("addAppointmentForm");
+if (addAppointmentForm) {
+    const kindSelect = document.getElementById("newAppointmentKind");
+    const timeGroup = document.getElementById("newAppointmentTimeGroup");
+    const timeInput = document.getElementById("newAppointmentTime");
+    const durationInput = document.getElementById("newAppointmentDuration");
+    const durationLabel = document.getElementById("newAppointmentDurationLabel");
+    const projectDayModeGroup = document.getElementById("newProjectDayModeGroup");
+    const updateKindFields = () => {
+        const project = kindSelect.value === "project";
+        timeGroup.style.display = project ? "none" : "block";
+        timeInput.required = !project;
+        if (project) timeInput.value = "";
+        durationLabel.textContent = project ? "Duration (days)" : "Duration (hours)";
+        durationInput.min = project ? "1" : "0.5";
+        durationInput.step = project ? "1" : "0.5";
+        projectDayModeGroup.style.display = project ? "block" : "none";
+    };
+    kindSelect.addEventListener("change", updateKindFields);
+    updateKindFields();
+    addAppointmentForm.addEventListener("submit", async event => {
+        event.preventDefault();
+        const ticketId = getCurrentTicketId();
+        const isProject = kindSelect.value === "project";
+        const status = document.getElementById("addAppointmentStatus");
+        const payload = {
+            date: document.getElementById("newAppointmentDate").value,
+            time: timeInput.value,
+            address: document.getElementById("newAppointmentAddress").value.trim()
+        };
+        if (isProject) {
+            payload.projectDays = Number(durationInput.value);
+            payload.projectDayMode = document.getElementById("newProjectDayMode").value;
+        } else {
+            payload.durationHours = Number(durationInput.value);
+        }
+        const submit = addAppointmentForm.querySelector('button[type="submit"]');
+        submit.disabled = true;
+        status.textContent = "Finding an available technician...";
+        try {
+            const response = await fetch(
+                `/api/staff/tickets/${encodeURIComponent(ticketId)}/appointments`,
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                }
+            );
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || "Unable to schedule the visit.");
+            status.textContent = data.technician
+                ? `Visit assigned to ${data.technician}.`
+                : data.appointment["Scheduling Note"];
+            addAppointmentForm.reset();
+            updateKindFields();
+            await loadTicketAppointments(ticketId);
+            await refreshServiceReportButtonState();
+        } catch (error) {
+            status.textContent = error.message;
+            status.setAttribute("role", "alert");
+        } finally {
+            submit.disabled = false;
+        }
+    });
 }
 
 

@@ -186,6 +186,8 @@
         </div>
         <nav class="staff-nav" id="staffNav" aria-label="Staff navigation">
             <a href="/staff.html" class="staff-nav-link" aria-current="location">Dashboard</a>
+            <a href="/staff-database.html" class="staff-nav-link">Staff</a>
+            <a href="/customer-database.html" class="staff-nav-link">Customer</a>
             <a href="/staff-profile.html" class="staff-profile-button staff-nav-profile" aria-label="Staff Profile" title="Staff Profile">
                 <span class="staff-profile-icon" aria-hidden="true">👤</span>
             </a>
@@ -315,6 +317,18 @@
                     </div>
                 </div>
 
+                <div id="projectCreditSummary" hidden aria-label="Project credit summary" style="margin:12px 0;padding:12px;background:#f8fafc;border-radius:8px;">
+                    <div>
+                        <strong>Project estimate and credits</strong>
+                        <div class="info-row"><span class="info-label">Estimated work</span><span class="info-value" id="projectEstimatedHours">-</span></div>
+                        <div class="info-row"><span class="info-label">Initial reserved days</span><span class="info-value" id="projectReservedDays">-</span></div>
+                        <div class="info-row"><span class="info-label">Actual billable credits</span><span class="info-value" id="projectBillableCredits">-</span></div>
+                        <div class="info-row"><span class="info-label">Credits charged</span><span class="info-value" id="projectCreditsCharged">-</span></div>
+                        <div class="info-row"><span class="info-label">Unpaid credits</span><span class="info-value" id="projectUnpaidCredits">-</span></div>
+                        <div class="info-row"><span class="info-label">Settlement</span><span class="info-value" id="projectCreditStatus">-</span></div>
+                    </div>
+                </div>
+
                 <div class="info-row" id="appointmentDateRow">
                     <div class="info-label">
                         Appointment Date
@@ -330,6 +344,10 @@
                 <div class="info-row" id="appointmentTimeRow">
                     <div class="info-label">
                         Appointment Time
+                    </div>
+                    <div class="info-row" id="ticketAppointmentsRow">
+                        <div class="info-label">Visits</div>
+                        <div class="info-value" id="ticketAppointmentList">Loading visits...</div>
                     </div>
                     <div
                         class="info-value"
@@ -351,7 +369,7 @@
                     </div>
                 </div>
 
-                <div class="button-group" style="margin-top: 20px;">
+                <div class="button-group" id="serviceReportActionGroup" style="margin-top: 20px;">
 
                     <button
                         id="serviceReportActionButton"
@@ -417,7 +435,7 @@
                     <label for="appointmentStatus">
                         Appointment Status
                     </label>
-                    <select id="appointmentStatus">
+                    <select id="appointmentStatus" id="">
                         <option value="Pending">
                             Pending
                         </option>
@@ -459,6 +477,44 @@
                 </div>
 
 
+            </section>
+
+            <section class="card" id="scheduleAnotherVisitSection">
+                <h2>Schedule Another Visit</h2>
+                <form id="addAppointmentForm">
+                    <div class="form-group">
+                        <label for="newAppointmentKind">Visit reservation type</label>
+                        <select id="newAppointmentKind">
+                            <option value="timed">Timed appointment</option>
+                            <option value="project">Multi-day Project</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="newAppointmentDate">Start date</label>
+                        <input id="newAppointmentDate" type="date" required>
+                    </div>
+                    <div class="form-group" id="newAppointmentTimeGroup">
+                        <label for="newAppointmentTime">Start time</label>
+                        <input id="newAppointmentTime" type="time" required>
+                    </div>
+                    <div class="form-group">
+                        <label id="newAppointmentDurationLabel" for="newAppointmentDuration">Duration (hours)</label>
+                        <input id="newAppointmentDuration" type="number" min="0.5" step="0.5" required>
+                    </div>
+                    <div class="form-group" id="newProjectDayModeGroup" style="display:none;">
+                        <label for="newProjectDayMode">Project reservation days</label>
+                        <select id="newProjectDayMode">
+                            <option value="calendar">Calendar days, including weekends</option>
+                            <option value="weekdays">Weekdays only</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="newAppointmentAddress">Visit address</label>
+                        <textarea id="newAppointmentAddress" maxlength="500" required></textarea>
+                    </div>
+                    <button class="button save-button" type="submit">Find Technician and Schedule</button>
+                    <p id="addAppointmentStatus" role="status" aria-live="polite"></p>
+                </form>
             </section>
 
                 <div class="button-group" style="margin-top: 16px;">
@@ -559,6 +615,16 @@
             <h2 id="serviceReportFormTitle" style="color: #0B2163; margin-bottom: 20px;">Create Service Report</h2>
 
             <form id="serviceReportForm">
+                <div class="form-group" id="reportAppointmentGroup" style="display: none;">
+                    <label for="reportAppointmentId">Appointment being completed</label>
+                    <select id="reportAppointmentId"></select>
+                </div>
+                <div class="form-group" id="projectCompleteGroup" style="display: none;">
+                    <label>
+                        <input id="projectComplete" type="checkbox">
+                        This is the final service session; mark the Project complete
+                    </label>
+                </div>
                 <div class="form-group">
                     <label for="reportServiceMode">Service Mode</label>
                     <select id="reportServiceMode">

@@ -54,6 +54,26 @@ function writeWorkbook() {
         ]),
         "Staff"
     );
+    XLSX.utils.book_append_sheet(
+        workbook,
+        XLSX.utils.json_to_sheet([
+            {
+                "Ticket ID": "T-300",
+                Issue: "Unassigned test ticket",
+                Status: "Open",
+                "Assigned Engineer": "",
+                "Assigned Staff ID": ""
+            },
+            {
+                "Ticket ID": "T-301",
+                Issue: "Already assigned test ticket",
+                Status: "Open",
+                "Assigned Engineer": "Second Staff",
+                "Assigned Staff ID": "S-200"
+            }
+        ]),
+        "Ticket"
+    );
     XLSX.writeFile(workbook, databasePath);
 }
 
@@ -237,4 +257,99 @@ test("POST /api/staff/login limits attempts and allows retry after the window", 
     await wait(120);
     const retryResponse = await login(staffCredentials.email, staffCredentials.password);
     assert.equal(retryResponse.status, 200);
+});
+
+test("staff directory is session-protected, imports login accounts, and retains independent staff records", async () => {
+    const unauthorized = await fetch(`${baseUrl}/api/staff/directory`);
+    assert.equal(unauthorized.status, 401);
+
+    const loginResponse = await login(staffCredentials.email, staffCredentials.password);
+    const cookie = sessionCookie(loginResponse);
+    const directoryResponse = await fetch(`${baseUrl}/api/staff/directory`, {
+        headers: { Cookie: cookie }
+    });
+    const directory = await directoryResponse.json();
+    assert.equal(directoryResponse.status, 200);
+    assert.equal(directory.staff.length, 2);
+    assert.equal(directory.staff[0].loginStaffId, "S-100");
+    assert.equal(Object.hasOwn(directory.staff[0], "password"), false);
+    assert.equal(directory.loginAccounts.length, 2);
+
+    const createResponse = await fetch(`${baseUrl}/api/staff/directory`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Cookie: cookie
+        },
+        body: JSON.stringify({
+            name: "No Login Technician",
+            role: "Technician",
+            department: "Field Support",
+            email: "technician@example.test",
+            phone: "555-0100"
+        })
+    });
+    const created = await createResponse.json();
+    assert.equal(createResponse.status, 201);
+    assert.equal(created.staff.loginStaffId, "");
+
+    const deactivateResponse = await fetch(
+        `${baseUrl}/api/staff/directory/${encodeURIComponent(created.staff.staffId)}`,
+        {
+            method: "PATCH",
+            headers: {
+                "Content-Type": "application/json",
+                Cookie: cookie
+            },
+            body: JSON.stringify({ active: false })
+        }
+    );
+    assert.equal(deactivateResponse.status, 200);
+
+    const savedWorkbook = XLSX.readFile(databasePath);
+    const roster = XLSX.utils.sheet_to_json(savedWorkbook.Sheets.StaffRoster);
+    const inactive = roster.find(person => person["Staff ID"] === created.staff.staffId);
+    assert.equal(inactive.Active, "No");
+});
+
+test("staff can assign an unassigned ticket to an active staff record", async () => {
+    const unauthorized = await fetch(`${baseUrl}/api/staff/tickets/T-300/assignment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ staffId: "S-200" })
+    });
+    assert.equal(unauthorized.status, 401);
+
+    const cookie = sessionCookie(await login(staffCredentials.email, staffCredentials.password));
+    const directoryResponse = await fetch(`${baseUrl}/api/staff/directory`, {
+        headers: { Cookie: cookie }
+    });
+    const directory = await directoryResponse.json();
+    assert.deepEqual(directory.unassignedTickets.map(ticket => ticket.ticketId), ["T-300"]);
+
+    const assignmentResponse = await fetch(`${baseUrl}/api/staff/tickets/T-300/assignment`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Cookie: cookie
+        },
+        body: JSON.stringify({ staffId: "S-200" })
+    });
+    assert.equal(assignmentResponse.status, 200);
+
+    const workbook = XLSX.readFile(databasePath);
+    const tickets = XLSX.utils.sheet_to_json(workbook.Sheets.Ticket);
+    const assignedTicket = tickets.find(ticket => ticket["Ticket ID"] === "T-300");
+    assert.equal(assignedTicket["Assigned Staff ID"], "S-200");
+    assert.equal(assignedTicket["Assigned Engineer"], "Second Staff");
+
+    const duplicateResponse = await fetch(`${baseUrl}/api/staff/tickets/T-300/assignment`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Cookie: cookie
+        },
+        body: JSON.stringify({ staffId: "S-100" })
+    });
+    assert.equal(duplicateResponse.status, 409);
 });

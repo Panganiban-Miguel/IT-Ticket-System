@@ -81,6 +81,7 @@ async function startIsolatedApp() {
         fs.mkdirSync(databaseDir);
         fs.mkdirSync(publicDir);
         fs.copyFileSync(path.join(projectRoot, "server.js"), path.join(runtimeRoot, "server.js"));
+        fs.copyFileSync(path.join(projectRoot, "scheduler.js"), path.join(runtimeRoot, "scheduler.js"));
         const workbookPath = path.join(databaseDir, "database.xlsx");
         createWorkbook(workbookPath);
 

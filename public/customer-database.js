@@ -175,8 +175,8 @@
         const { customer, ticketCounts, tickets } = data;
         document.title = `${customer.name || customer.id} - IT Support`;
         document.getElementById("customerName").textContent = customer.name || "Customer Details";
-        document.getElementById("customerId").textContent = customer.id || "—";
-        document.getElementById("customerEmail").textContent = customer.email || "—";
+        document.getElementById("customerId").textContent = customer.id || "-";
+        document.getElementById("customerEmail").textContent = customer.email || "-";
         document.getElementById("customerCredits").textContent = formatCredits(customer.credits);
         document.getElementById("totalTickets").textContent = ticketCounts.total;
         document.getElementById("openTicketCount").textContent = ticketCounts.open;
