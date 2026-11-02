@@ -1998,88 +1998,88 @@ function closeServiceReportFormModal() {
     }
 }
 
+async function populateServiceReportAppointmentOptions(selectedId = "") {
+    const group = document.getElementById("reportAppointmentGroup");
+    const select = document.getElementById("reportAppointmentId");
+    const projectCompleteGroup = document.getElementById("projectCompleteGroup");
+    const projectCompleteCheckbox = document.getElementById("projectComplete");
+    if (!group || !select) {
+        return;
+    }
+
+    const response = await fetch(`/api/tickets/${encodeURIComponent(getCurrentTicketId())}/appointments`);
+    const appointments = await response.json();
+    if (!response.ok) {
+        throw new Error(appointments.message || "Failed to load ticket appointments.");
+    }
+    const available = appointments.filter(appointment =>
+        appointment["Appointment ID"] === selectedId ||
+        (
+            ["Pending", "Confirmed"].includes(String(appointment.Status || "")) &&
+            (
+                Number(appointment["Project Days"] || 0) > 0 ||
+                !appointment["Service Report ID"]
+            )
+        )
+    );
+    select.replaceChildren();
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "Select appointment";
+    select.appendChild(blank);
+    available.forEach(appointment => {
+        const option = document.createElement("option");
+        option.value = appointment["Appointment ID"];
+        const project = Number(appointment["Project Days"] || 0) > 0;
+        const sessions = project
+            ? JSON.parse(String(appointment["Service Sessions"] || "[]")).length
+            : 0;
+        option.textContent = `${appointment["Start Date"]} ${project ? `${appointment["Project Days"]} ${appointment["Project Day Mode"] || "calendar"} days (${sessions} sessions)` : `${appointment["Start Time"]}–${appointment["End Time"]}`} · ${appointment.technicianName || "Unassigned"} · ${appointment.Address}`;
+        option.dataset.engineer = appointment.technicianName || "";
+        option.dataset.project = project ? "true" : "false";
+        select.appendChild(option);
+    });
+    group.style.display = available.length ? "block" : "none";
+    select.required = available.length > 0;
+    select.disabled = serviceReportFormMode === "edit";
+    if (selectedId) {
+        select.value = selectedId;
+    } else if (available.length === 1) {
+        select.value = available[0]["Appointment ID"];
+    }
+    select.onchange = () => {
+        const selectedOption = select.selectedOptions[0];
+        const engineerSelect = document.getElementById("reportEngineer");
+        const isProject = selectedOption?.dataset.project === "true";
+        if (projectCompleteGroup) {
+            projectCompleteGroup.style.display = isProject ? "block" : "none";
+        }
+        if (projectCompleteCheckbox && serviceReportFormMode !== "edit") {
+            projectCompleteCheckbox.checked = false;
+        }
+        if (selectedOption?.dataset.engineer && engineerSelect) {
+            engineerSelect.value = selectedOption.dataset.engineer;
+        }
+    };
+    select.dispatchEvent(new Event("change"));
+    if (serviceReportFormMode === "edit" && selectedId) {
+        const report = currentServiceReport;
+        if (projectCompleteCheckbox) {
+            projectCompleteCheckbox.checked = report?.["Project Complete"] === "Yes";
+        }
+        const selectedOption = select.selectedOptions[0];
+        if (projectCompleteGroup) {
+            projectCompleteGroup.style.display =
+                selectedOption?.dataset.project === "true" ? "block" : "none";
+        }
+    }
+}
+
 async function populateServiceReportEngineerOptions(currentEngineer = "") {
     const select = document.getElementById("reportEngineer");
 
     if (!select) {
         return;
-    }
-
-    async function populateServiceReportAppointmentOptions(selectedId = "") {
-        const group = document.getElementById("reportAppointmentGroup");
-        const select = document.getElementById("reportAppointmentId");
-        const projectCompleteGroup = document.getElementById("projectCompleteGroup");
-        const projectCompleteCheckbox = document.getElementById("projectComplete");
-        if (!group || !select) {
-            return;
-        }
-
-        const response = await fetch(`/api/tickets/${encodeURIComponent(getCurrentTicketId())}/appointments`);
-        const appointments = await response.json();
-        if (!response.ok) {
-            throw new Error(appointments.message || "Failed to load ticket appointments.");
-        }
-        const available = appointments.filter(appointment =>
-            appointment["Appointment ID"] === selectedId ||
-            (
-                ["Pending", "Confirmed"].includes(String(appointment.Status || "")) &&
-                (
-                    Number(appointment["Project Days"] || 0) > 0 ||
-                    !appointment["Service Report ID"]
-                )
-            )
-        );
-        select.replaceChildren();
-        const blank = document.createElement("option");
-        blank.value = "";
-        blank.textContent = "Select appointment";
-        select.appendChild(blank);
-        available.forEach(appointment => {
-            const option = document.createElement("option");
-            option.value = appointment["Appointment ID"];
-            const project = Number(appointment["Project Days"] || 0) > 0;
-            const sessions = project
-                ? JSON.parse(String(appointment["Service Sessions"] || "[]")).length
-                : 0;
-            option.textContent = `${appointment["Start Date"]} ${project ? `${appointment["Project Days"]} ${appointment["Project Day Mode"] || "calendar"} days (${sessions} sessions)` : `${appointment["Start Time"]}–${appointment["End Time"]}`} · ${appointment.technicianName || "Unassigned"} · ${appointment.Address}`;
-            option.dataset.engineer = appointment.technicianName || "";
-            option.dataset.project = project ? "true" : "false";
-            select.appendChild(option);
-        });
-        group.style.display = available.length ? "block" : "none";
-        select.required = available.length > 0;
-        select.disabled = serviceReportFormMode === "edit";
-        if (selectedId) {
-            select.value = selectedId;
-        } else if (available.length === 1) {
-            select.value = available[0]["Appointment ID"];
-        }
-        select.onchange = () => {
-            const selectedOption = select.selectedOptions[0];
-            const engineerSelect = document.getElementById("reportEngineer");
-            const isProject = selectedOption?.dataset.project === "true";
-            if (projectCompleteGroup) {
-                projectCompleteGroup.style.display = isProject ? "block" : "none";
-            }
-            if (projectCompleteCheckbox && serviceReportFormMode !== "edit") {
-                projectCompleteCheckbox.checked = false;
-            }
-            if (selectedOption?.dataset.engineer && engineerSelect) {
-                engineerSelect.value = selectedOption.dataset.engineer;
-            }
-        };
-        select.dispatchEvent(new Event("change"));
-        if (serviceReportFormMode === "edit" && selectedId) {
-            const report = currentServiceReport;
-            if (projectCompleteCheckbox) {
-                projectCompleteCheckbox.checked = report?.["Project Complete"] === "Yes";
-            }
-            const selectedOption = select.selectedOptions[0];
-            if (projectCompleteGroup) {
-                projectCompleteGroup.style.display =
-                    selectedOption?.dataset.project === "true" ? "block" : "none";
-            }
-        }
     }
 
     try {
